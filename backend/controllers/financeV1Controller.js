@@ -174,7 +174,7 @@ const calculateStudentTotalsFromLedger = async (db, student, syid, semid, school
         SUM(CASE WHEN particulars LIKE '%DISCOUNT:%' THEN payment ELSE 0 END) as total_discount,
         SUM(CASE WHEN particulars NOT LIKE '%DISCOUNT:%' THEN payment ELSE 0 END) as total_payment
       FROM studledger
-      WHERE studid = ? AND syid = ? AND deleted = 0
+      WHERE studid = ? AND syid = ? AND deleted = '0'
     `;
 
     if (semid !== null && semid !== undefined) {
@@ -231,7 +231,7 @@ const calculateStudentTotalsFromLedger = async (db, student, syid, semid, school
 const hasStudledgerEntries = async (db, studid, syid) => {
   try {
     const [rows] = await db.execute(
-      'SELECT COUNT(*) as count FROM studledger WHERE studid = ? AND syid = ? AND deleted = 0 LIMIT 1',
+      'SELECT COUNT(*) as count FROM studledger WHERE studid = ? AND syid = ? AND deleted = \'0\' LIMIT 1',
       [studid, syid]
     );
     return toNumber(rows[0]?.count) > 0;
@@ -277,7 +277,7 @@ const getBulkStudentBalancesFromLedger = async (db, studentIds, syid, semid, sch
         SUM(CASE WHEN sl.particulars LIKE '%DISCOUNT:%' THEN sl.payment ELSE 0 END) as total_discount,
         SUM(CASE WHEN sl.particulars NOT LIKE '%DISCOUNT:%' THEN sl.payment ELSE 0 END) as total_payment
       FROM studledger sl
-      WHERE sl.studid IN (${placeholders}) AND sl.syid = ? AND sl.deleted = 0
+      WHERE sl.studid IN (${placeholders}) AND sl.syid = ? AND sl.deleted = '0'
     `;
 
     if (semid !== null && semid !== undefined) {
@@ -455,7 +455,7 @@ const getAcademicPrograms = async (db) => {
  */
 const getGradeLevels = async (db) => {
   const [rows] = await db.execute(
-    'SELECT id, levelname, acadprogid FROM gradelevel WHERE deleted = 0 ORDER BY levelname'
+    'SELECT id, levelname, acadprogid FROM gradelevel WHERE deleted = \'0\' ORDER BY levelname'
   );
   return rows;
 };
@@ -469,7 +469,7 @@ const getGrantees = async (db) => {
 
 const getModesOfLearning = async (db) => {
   const [rows] = await db.execute(
-    'SELECT id, description FROM modeoflearning WHERE deleted = 0 ORDER BY description'
+    'SELECT id, description FROM modeoflearning WHERE deleted = \'0\' ORDER BY description'
   );
   return rows;
 };
@@ -493,7 +493,7 @@ const getSectionsByLevel = async (db, levelId) => {
     const [sections] = await db.execute(
       `SELECT id, sectionDesc as sectionname
        FROM college_sections
-       WHERE yearID = ? AND deleted = 0
+       WHERE yearID = ? AND deleted = '0'
        ORDER BY sectionDesc`,
       [levelId]
     );
@@ -503,7 +503,7 @@ const getSectionsByLevel = async (db, levelId) => {
   const [sections] = await db.execute(
     `SELECT id, sectionname
      FROM sections
-     WHERE levelid = ? AND deleted = 0
+     WHERE levelid = ? AND deleted = '0'
      ORDER BY sectionname`,
     [levelId]
   );
@@ -535,7 +535,7 @@ const getEnrolledStudentIds = async (db, syid, semid, programId) => {
 
   const addIds = async (table, useSem) => {
     const params = [];
-    let query = `SELECT studid FROM ${table} WHERE deleted = 0`;
+    let query = `SELECT studid FROM ${table} WHERE deleted = '0'`;
     if (syid) {
       query += ' AND syid = ?';
       params.push(syid);
@@ -597,7 +597,7 @@ const getFeesIdForStudent = async (db, student, syid, semid) => {
 
   const enrollTable = getEnrollmentTable(student.levelid);
   const params = [student.id, syid];
-  let query = `SELECT feesid FROM ${enrollTable} WHERE studid = ? AND syid = ? AND deleted = 0`;
+  let query = `SELECT feesid FROM ${enrollTable} WHERE studid = ? AND syid = ? AND deleted = '0'`;
 
   if (useSemesterForLevel(student.levelid) && semid) {
     query += ' AND semid = ?';
@@ -621,14 +621,14 @@ const getStudentUnits = async (db, studid, syid, semid, levelid) => {
     `SELECT cp.lecunits, cp.labunits, cp.subjectID
      FROM college_loadsubject cls
      JOIN college_prospectus cp ON cls.subjectID = cp.id
-     WHERE cls.studid = ? AND cls.syid = ? AND cls.semid = ? AND cls.deleted = 0`,
+     WHERE cls.studid = ? AND cls.syid = ? AND cls.semid = ? AND cls.deleted = '0'`,
     [studid, syid, semid]
   );
 
   let totalUnits = 0;
   for (const unit of rows) {
     const [assessmentRows] = await db.execute(
-      'SELECT id FROM tuition_assessmentunit WHERE subjid = ? AND deleted = 0 LIMIT 1',
+      'SELECT id FROM tuition_assessmentunit WHERE subjid = ? AND deleted = \'0\' LIMIT 1',
       [unit.subjectID]
     );
     if (assessmentRows.length > 0) {
@@ -649,7 +649,7 @@ const getStudentSubjectCount = async (db, studid, syid, semid, levelid) => {
     const [rows] = await db.execute(
       `SELECT COUNT(*) as count
        FROM college_loadsubject
-       WHERE studid = ? AND syid = ? AND semid = ? AND deleted = 0`,
+       WHERE studid = ? AND syid = ? AND semid = ? AND deleted = '0'`,
       [studid, syid, semid]
     );
     return toNumber(rows[0]?.count);
@@ -660,7 +660,7 @@ const getStudentSubjectCount = async (db, studid, syid, semid, levelid) => {
       `SELECT COUNT(*) as count
        FROM sh_studsched ss
        JOIN sh_classsched sc ON ss.schedid = sc.id
-       WHERE ss.studid = ? AND ss.deleted = 0 AND sc.deleted = 0
+       WHERE ss.studid = ? AND ss.deleted = '0' AND sc.deleted = '0'
          AND sc.syid = ? AND sc.semid = ?`,
       [studid, syid, semid]
     );
@@ -695,9 +695,9 @@ const fetchTuitionFees = async (db, student, syid, semid, schoolInfo) => {
     JOIN tuitiondetail td ON th.id = td.headerid
     JOIN itemclassification ic ON td.classificationid = ic.id
     WHERE th.syid = ?
-      AND th.deleted = 0
-      AND td.deleted = 0
-      AND ic.deleted = 0
+      AND th.deleted = '0'
+      AND td.deleted = '0'
+      AND ic.deleted = '0'
   `;
 
   if (student.levelid === 14 || student.levelid === 15) {
@@ -753,7 +753,7 @@ const applyDiscounts = async (db, student, syid, semid, totalsByClass) => {
   let query = `
     SELECT classid, SUM(discamount) as amount
     FROM studdiscounts
-    WHERE studid = ? AND syid = ? AND deleted = 0 AND posted = 1
+    WHERE studid = ? AND syid = ? AND deleted = '0' AND posted = 1
   `;
 
   if (useSemesterForLevel(student.levelid) && semid) {
@@ -791,7 +791,7 @@ const fetchBookEntries = async (db, student, syid, semid) => {
   let query = `
     SELECT SUM(amount) as amount
     FROM bookentries
-    WHERE studid = ? AND syid = ? AND deleted = 0
+    WHERE studid = ? AND syid = ? AND deleted = '0'
   `;
 
   if (useSemesterForLevel(student.levelid) && semid) {
@@ -817,7 +817,7 @@ const fetchAdjustmentCharges = async (db, student, syid, semid) => {
     SELECT SUM(a.amount) as amount
     FROM adjustmentdetails ad
     JOIN adjustments a ON ad.headerid = a.id
-    WHERE ad.studid = ? AND a.syid = ? AND ad.deleted = 0 AND a.deleted = 0
+    WHERE ad.studid = ? AND a.syid = ? AND ad.deleted = '0' AND a.deleted = '0'
       AND a.isdebit = 1
   `;
 
@@ -840,7 +840,7 @@ const fetchOldAccountCharges = async (db, student, syid, semid, balClassId) => {
   let query = `
     SELECT SUM(amount) as amount
     FROM studledger
-    WHERE studid = ? AND syid = ? AND classid = ? AND amount > 0 AND deleted = 0 AND void = 0
+    WHERE studid = ? AND syid = ? AND classid = ? AND amount > 0 AND deleted = '0' AND void = '0'
   `;
 
   if (useSemesterForLevel(student.levelid) && semid) {
@@ -879,7 +879,7 @@ const fetchStudentPayments = async (db, student, syid, semid, balClassId) => {
     let oldQuery = `
       SELECT SUM(payment) as amount
       FROM studledger
-      WHERE studid = ? AND syid = ? AND classid = ? AND deleted = 0 AND payment > 0
+      WHERE studid = ? AND syid = ? AND classid = ? AND deleted = '0' AND payment > 0
     `;
 
     if (useSemesterForLevel(student.levelid) && semid) {
@@ -896,7 +896,7 @@ const fetchStudentPayments = async (db, student, syid, semid, balClassId) => {
     SELECT SUM(a.amount) as amount
     FROM adjustmentdetails ad
     JOIN adjustments a ON ad.headerid = a.id
-    WHERE ad.studid = ? AND a.syid = ? AND ad.deleted = 0 AND a.deleted = 0
+    WHERE ad.studid = ? AND a.syid = ? AND ad.deleted = '0' AND a.deleted = '0'
       AND a.iscredit = 1
   `;
 
@@ -1100,18 +1100,25 @@ const fetchStudents = async (db, { syid, semid, programId, levelId, sectionId, g
       JOIN sections s ON si.sectionid = s.id
       JOIN gradelevel gl ON s.levelid = gl.id
       JOIN academicprogram ap ON gl.acadprogid = ap.id
-      WHERE s.deleted = 0
-        AND si.deleted = 0
-        AND es.deleted = 0
-        AND si.studstatus <> 0
+      WHERE s.deleted = '0'
+        AND si.deleted = '0'
+        AND es.deleted = '0'
+        AND si.studstatus <> '0'
         AND es.syid = ?
         ${searchClause}
     `,
     [syid, ...searchParams]
   );
 
+  // SHS students - always query (matching PHP behavior)
+  // PHP: ->where('sh_enrolledstud.semid', $selectedsemester) runs even when null
+  // Laravel converts where('col', null) to WHERE col IS NULL
   let shsStudents = [];
-  if (semid) {
+  const shsSemClause = semid !== null && semid !== undefined
+    ? 'AND sh.semid = ?'
+    : 'AND sh.semid IS NULL';
+  const shsSemParams = semid !== null && semid !== undefined ? [semid] : [];
+  try {
     [shsStudents] = await db.execute(
       `
         SELECT DISTINCT
@@ -1133,20 +1140,32 @@ const fetchStudents = async (db, { syid, semid, programId, levelId, sectionId, g
         JOIN sections s ON si.sectionid = s.id
         JOIN gradelevel gl ON s.levelid = gl.id
         JOIN academicprogram ap ON gl.acadprogid = ap.id
-        WHERE s.deleted = 0
-          AND si.deleted = 0
-          AND sh.deleted = 0
-          AND si.studstatus <> 0
+        WHERE s.deleted = '0'
+          AND si.deleted = '0'
+          AND sh.deleted = '0'
+          AND si.studstatus <> '0'
           AND sh.syid = ?
-          AND sh.semid = ?
+          ${shsSemClause}
           ${searchClause}
       `,
-      [syid, semid, ...searchParams]
+      [syid, ...shsSemParams, ...searchParams]
     );
+  } catch (error) {
+    if (error?.code !== 'ER_NO_SUCH_TABLE') throw error;
   }
 
+  // College students - always query (matching PHP behavior)
+  // PHP college query runs without semid in SQL, then filters in-memory
   let collegeStudents = [];
-  if (semid) {
+  try {
+    const collegeParams = [syid, ...searchParams];
+    let collegeSemClause = '';
+    // PHP: college query has NO semid filter in SQL; it filters in-memory afterward
+    // But for efficiency, if semid is set we can filter in SQL (same result)
+    if (semid !== null && semid !== undefined) {
+      collegeSemClause = 'AND ce.semid = ?';
+      collegeParams.splice(1, 0, semid); // insert after syid
+    }
     [collegeStudents] = await db.execute(
       `
         SELECT DISTINCT
@@ -1168,16 +1187,18 @@ const fetchStudents = async (db, { syid, semid, programId, levelId, sectionId, g
         JOIN college_sections cs ON ce.sectionID = cs.id
         JOIN gradelevel gl ON cs.yearID = gl.id
         JOIN academicprogram ap ON gl.acadprogid = ap.id
-        WHERE cs.deleted = 0
-          AND si.deleted = 0
-          AND ce.deleted = 0
-          AND si.studstatus <> 0
+        WHERE cs.deleted = '0'
+          AND si.deleted = '0'
+          AND ce.deleted = '0'
+          AND si.studstatus <> '0'
           AND ce.syid = ?
-          AND ce.semid = ?
+          ${collegeSemClause}
           ${searchClause}
       `,
-      [syid, semid, ...searchParams]
+      collegeParams
     );
+  } catch (error) {
+    if (error?.code !== 'ER_NO_SUCH_TABLE') throw error;
   }
 
   const uniqueStudents = new Map();
@@ -1403,7 +1424,7 @@ export const getAccountReceivableSummary = async (req, res) => {
       search: null,
     });
 
-    // OPTIMIZED: Use bulk query instead of per-student loop
+    // Use optimized bulk query for studledger calculations
     const studentsWithTotals = await getStudentsWithBalancesBulk(
       db,
       students,
@@ -1848,7 +1869,7 @@ export const getPaymentTypes = async (req, res) => {
     const db = await getSchoolConnection(schoolDbConfig);
 
     const [paymentTypes] = await db.execute(
-      'SELECT * FROM paymenttype WHERE deleted = 0 ORDER BY id'
+      'SELECT * FROM paymenttype WHERE deleted = \'0\' ORDER BY id'
     );
 
     await db.end();

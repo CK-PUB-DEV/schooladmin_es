@@ -23,33 +23,6 @@ const DATE_FILTER_OPTIONS = [
 const PER_PAGE = 200;
 
 export default function AccountReceivables() {
-  const [summaryData, setSummaryData] = useState(null);
-  const [receivables, setReceivables] = useState([]);
-  const [programs, setPrograms] = useState([]);
-  const [gradeLevels, setGradeLevels] = useState([]);
-  const [sections, setSections] = useState([]);
-  const [grantees, setGrantees] = useState([]);
-  const [modes, setModes] = useState([]);
-  const [schoolYears, setSchoolYears] = useState([]);
-  const [semesters, setSemesters] = useState([]);
-  const [summaryLoading, setSummaryLoading] = useState(false);
-  const [listLoading, setListLoading] = useState(false);
-
-  const [selectedSy, setSelectedSy] = useState('');
-  const [selectedSem, setSelectedSem] = useState('');
-  const [selectedProgram, setSelectedProgram] = useState('all');
-  const [selectedLevel, setSelectedLevel] = useState('all');
-  const [selectedSection, setSelectedSection] = useState('all');
-  const [selectedGrantee, setSelectedGrantee] = useState('all');
-  const [selectedMode, setSelectedMode] = useState('all');
-  const [dateFilter, setDateFilter] = useState('all');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-
-  const summaryAbortRef = useRef(null);
-  const listAbortRef = useRef(null);
-  const debounceRef = useRef(null);
-
   const selectedSchool = JSON.parse(localStorage.getItem('selectedSchool') || 'null');
   const token = localStorage.getItem('token');
 
@@ -66,6 +39,33 @@ export default function AccountReceivables() {
   // Check if school uses finance_v1 to determine API routing
   const isFinanceV1 = selectedSchool?.finance_v1 == 1;
   const API_BASE = isFinanceV1 ? '/api/admin/finance-v1' : '/api/admin';
+
+  const [summaryData, setSummaryData] = useState(null);
+  const [receivables, setReceivables] = useState([]);
+  const [programs, setPrograms] = useState([]);
+  const [gradeLevels, setGradeLevels] = useState([]);
+  const [sections, setSections] = useState([]);
+  const [grantees, setGrantees] = useState([]);
+  const [modes, setModes] = useState([]);
+  const [schoolYears, setSchoolYears] = useState([]);
+  const [semesters, setSemesters] = useState([]);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [listLoading, setListLoading] = useState(false);
+
+  const [selectedSy, setSelectedSy] = useState('');
+  const [selectedSem, setSelectedSem] = useState(isFinanceV1 ? 'all' : '');
+  const [selectedProgram, setSelectedProgram] = useState('all');
+  const [selectedLevel, setSelectedLevel] = useState('all');
+  const [selectedSection, setSelectedSection] = useState('all');
+  const [selectedGrantee, setSelectedGrantee] = useState('all');
+  const [selectedMode, setSelectedMode] = useState('all');
+  const [dateFilter, setDateFilter] = useState('all');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+
+  const summaryAbortRef = useRef(null);
+  const listAbortRef = useRef(null);
+  const debounceRef = useRef(null);
 
   useEffect(() => {
     if (!selectedSchool) {
@@ -180,11 +180,15 @@ export default function AccountReceivables() {
       const result = await response.json();
       if (response.ok && result.status === 'success') {
         setSemesters(result.data || []);
-        const active = result.data.find((sem) => sem.isactive === 1);
-        if (active) {
-          setSelectedSem(active.id.toString());
-        } else if (result.data.length > 0) {
-          setSelectedSem(result.data[0].id.toString());
+        // For finance_v1, default to "All" (matches PHP default() behavior - no semester filter)
+        // For non-v1, auto-select the active semester
+        if (!isFinanceV1) {
+          const active = result.data.find((sem) => sem.isactive === 1);
+          if (active) {
+            setSelectedSem(active.id.toString());
+          } else if (result.data.length > 0) {
+            setSelectedSem(result.data[0].id.toString());
+          }
         }
       }
     } catch (error) {
@@ -257,7 +261,7 @@ export default function AccountReceivables() {
     const payload = {
       schoolDbConfig,
       syid: selectedSy,
-      semid: selectedSem,
+      semid: selectedSem === 'all' ? null : selectedSem,
       programId: selectedProgram === 'all' ? null : selectedProgram,
       levelId: selectedLevel === 'all' ? null : selectedLevel,
     };
@@ -386,8 +390,8 @@ export default function AccountReceivables() {
   };
 
   const handleGenerate = () => {
-    if (!selectedSy || !selectedSem) {
-      toast.error('Select school year and semester');
+    if (!selectedSy || (!selectedSem && !isFinanceV1) || (isFinanceV1 && !selectedSem)) {
+      toast.error('Select school year');
       return;
     }
 
@@ -551,6 +555,7 @@ export default function AccountReceivables() {
                       <SelectValue placeholder="Select semester" />
                     </SelectTrigger>
                     <SelectContent>
+                      {isFinanceV1 && <SelectItem value="all">All</SelectItem>}
                       {semesters.length === 0 && (
                         <SelectItem value="none" disabled>
                           No semesters
