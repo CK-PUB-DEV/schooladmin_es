@@ -940,7 +940,8 @@ const calculateStudentTotals = async (db, student, syid, semid, schoolInfo, balC
 /**
  * Build summary statistics from student totals
  * Includes totals for assessment, discount, net assessed, payment, and
- * assessment-based receivable totals to align with finance_v1 UI expectations.
+ * balance-based receivable totals to match AccountsReceivableModel.php:
+ * balance = netassessed - totalpayment.
  */
 const buildSummary = (studentsWithTotals) => {
   const summary = {
@@ -958,6 +959,7 @@ const buildSummary = (studentsWithTotals) => {
 
   const byProgram = new Map();
   const byGradeLevel = new Map();
+  let positiveBalanceTotal = 0;
   const tiers = [
     { label: '0 - 1k', min: 0, max: 1000, count: 0, total_balance: 0 },
     { label: '1k - 5k', min: 1000, max: 5000, count: 0, total_balance: 0 },
@@ -970,6 +972,7 @@ const buildSummary = (studentsWithTotals) => {
     const discount = toNumber(student.discount);
     const netAssessed = toNumber(student.net_assessed);
     const totalPaid = toNumber(student.total_paid);
+    const balance = toNumber(student.balance);
     const overpayment = toNumber(student.overpayment);
 
     // Accumulate totals (matching PHP: overalltotalassessment, overalltotaldiscount, etc.)
@@ -978,17 +981,18 @@ const buildSummary = (studentsWithTotals) => {
     summary.total_net_assessed += netAssessed;
     summary.total_payment += totalPaid;
 
-    const receivableAmount = totalFees;
+    const receivableAmount = balance;
     summary.total_receivable += receivableAmount;
-    if (receivableAmount > 0) {
+    if (balance > 0) {
+      positiveBalanceTotal += balance;
       summary.students_with_balance += 1;
 
       const tier = tiers.find(
-        (item) => receivableAmount >= item.min && receivableAmount < item.max
+        (item) => balance >= item.min && balance < item.max
       );
       if (tier) {
         tier.count += 1;
-        tier.total_balance += receivableAmount;
+        tier.total_balance += balance;
       }
     }
 
@@ -1004,7 +1008,7 @@ const buildSummary = (studentsWithTotals) => {
       total_balance: 0,
       student_count: 0,
     };
-    programEntry.total_balance += receivableAmount;
+    programEntry.total_balance += balance;
     programEntry.student_count += 1;
     byProgram.set(programKey, programEntry);
 
@@ -1015,14 +1019,14 @@ const buildSummary = (studentsWithTotals) => {
       total_balance: 0,
       student_count: 0,
     };
-    levelEntry.total_balance += receivableAmount;
+    levelEntry.total_balance += balance;
     levelEntry.student_count += 1;
     byGradeLevel.set(levelKey, levelEntry);
   });
 
   summary.average_balance =
     summary.students_with_balance > 0
-      ? summary.total_receivable / summary.students_with_balance
+      ? positiveBalanceTotal / summary.students_with_balance
       : 0;
 
   summary.total_assessment = Number(summary.total_assessment.toFixed(2));
@@ -1279,11 +1283,11 @@ const buildSyComparison = async (db, options) => {
         balClassId
       );
 
-      if (Number(totals.total_fees) <= 0) {
+      if (Number(totals.balance) <= 0) {
         continue;
       }
 
-      totalReceivable += Number(totals.total_fees) || 0;
+      totalReceivable += Number(totals.balance) || 0;
       studentsWithBalance += 1;
     }
 
@@ -1581,8 +1585,6 @@ export const getCashierSummary = async (req, res) => {
   try {
     const {
       schoolDbConfig,
-      syid,
-      semid,
       startDate,
       endDate,
       paymentTypeId,
@@ -1599,10 +1601,13 @@ export const getCashierSummary = async (req, res) => {
 
     const db = await getSchoolConnection(schoolDbConfig);
 
-    const baseParams = [syid || 0, semid || 0];
+    const baseParams = [];
     const extraFilters = [];
     const extraParams = [];
 
+    // The legacy v1 cashier report filters by date/terminal/payment type only.
+    // syid/semid are intentionally not applied here because older v1 cashier
+    // transactions are not consistently tagged by active school year/semester.
     if (startDate) {
       extraFilters.push('DATE(t.transdate) >= ?');
       extraParams.push(startDate);
@@ -1613,12 +1618,10 @@ export const getCashierSummary = async (req, res) => {
       extraParams.push(endDate);
     }
 
-    // Note: v1 databases don't have paymenttype_id column in chrngtrans table
-    // Payment type filtering is not supported for v1 schools
-    // if (paymentTypeId) {
-    //   extraFilters.push('t.paymenttype_id = ?');
-    //   extraParams.push(paymentTypeId);
-    // }
+    if (paymentTypeId) {
+      extraFilters.push('pt.id = ?');
+      extraParams.push(paymentTypeId);
+    }
 
     if (terminalId) {
       extraFilters.push('t.terminalno = ?');
@@ -1638,12 +1641,11 @@ export const getCashierSummary = async (req, res) => {
     const extraClause = extraFilters.length ? ` AND ${extraFilters.join(' AND ')}` : '';
 
     // Get total transactions and amounts
-    // Note: finance_v1 schools don't have change_amount column
     const [totalStats] = await db.execute(
       `SELECT
         COUNT(*) as total_transactions,
-        SUM(totalamount) as total_collections,
-        SUM(CASE WHEN cancelled = 1 THEN totalamount ELSE 0 END) as cancelled_amount,
+        SUM(IFNULL(t.amountpaid, 0)) as total_collections,
+        SUM(CASE WHEN t.cancelled = 1 THEN IFNULL(t.amountpaid, 0) ELSE 0 END) as cancelled_amount,
         SUM(CASE WHEN cancelled = 1 THEN 1 ELSE 0 END) as cancelled_count,
         SUM(
           CASE
@@ -1662,13 +1664,24 @@ export const getCashierSummary = async (req, res) => {
           END
         ) as overpayment_count
       FROM chrngtrans t
-      WHERE t.syid = ? AND t.semid = ?${statusClause}${extraClause}`,
+      LEFT JOIN paymenttype pt ON t.paytype = pt.description
+      WHERE 1=1${statusClause}${extraClause}`,
       [...baseParams, ...extraParams]
     );
 
     // Get collections by payment type
-    // Note: v1 databases don't have paymenttype_id column, so this breakdown is not available
-    const byPaymentType = [];
+    const [byPaymentType] = await db.execute(
+      `SELECT
+        COALESCE(pt.description, t.paytype, 'N/A') as payment_type,
+        COUNT(t.id) as transaction_count,
+        SUM(IFNULL(t.amountpaid, 0)) as total_amount
+      FROM chrngtrans t
+      LEFT JOIN paymenttype pt ON t.paytype = pt.description
+      WHERE 1=1${breakdownStatusClause}${extraClause}
+      GROUP BY COALESCE(pt.description, t.paytype, 'N/A')
+      ORDER BY total_amount DESC`,
+      [...baseParams, ...extraParams]
+    );
 
     // Get collections by item classification
     const [byClassification] = await db.execute(
@@ -1679,7 +1692,8 @@ export const getCashierSummary = async (req, res) => {
       FROM chrngtransdetail ti
       LEFT JOIN itemclassification ic ON ti.classid = ic.id
       LEFT JOIN chrngtrans t ON ti.chrngtransid = t.id
-      WHERE t.syid = ? AND t.semid = ?${breakdownStatusClause}${extraClause}
+      LEFT JOIN paymenttype pt ON t.paytype = pt.description
+      WHERE 1=1${breakdownStatusClause}${extraClause}
       GROUP BY ti.classid, ic.description
       ORDER BY total_amount DESC`,
       [...baseParams, ...extraParams]
@@ -1691,10 +1705,11 @@ export const getCashierSummary = async (req, res) => {
         term.description as terminal,
         term.owner as cashier,
         COUNT(t.id) as transaction_count,
-        SUM(t.totalamount) as total_amount
+        SUM(IFNULL(t.amountpaid, 0)) as total_amount
       FROM chrngtrans t
       LEFT JOIN chrngterminals term ON t.terminalno = term.id
-      WHERE t.syid = ? AND t.semid = ?${breakdownStatusClause}${extraClause}
+      LEFT JOIN paymenttype pt ON t.paytype = pt.description
+      WHERE 1=1${breakdownStatusClause}${extraClause}
       GROUP BY t.terminalno, term.description, term.owner
       ORDER BY total_amount DESC`,
       [...baseParams, ...extraParams]
@@ -1703,13 +1718,14 @@ export const getCashierSummary = async (req, res) => {
     // Get daily collections for the last 7 days
     const [dailyCollections] = await db.execute(
       `SELECT
-        DATE(transdate) as date,
-        COUNT(id) as transaction_count,
-        SUM(totalamount) as total_amount
+        DATE(t.transdate) as date,
+        COUNT(t.id) as transaction_count,
+        SUM(IFNULL(t.amountpaid, 0)) as total_amount
       FROM chrngtrans t
-      WHERE t.syid = ? AND t.semid = ?${breakdownStatusClause}
+      LEFT JOIN paymenttype pt ON t.paytype = pt.description
+      WHERE 1=1${breakdownStatusClause}
         AND t.transdate >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)${extraClause}
-      GROUP BY DATE(transdate)
+      GROUP BY DATE(t.transdate)
       ORDER BY date DESC`,
       [...baseParams, ...extraParams]
     );
@@ -1743,8 +1759,6 @@ export const getTransactionList = async (req, res) => {
   try {
     const {
       schoolDbConfig,
-      syid,
-      semid,
       startDate,
       endDate,
       paymentTypeId,
@@ -1761,7 +1775,6 @@ export const getTransactionList = async (req, res) => {
 
     const db = await getSchoolConnection(schoolDbConfig);
 
-    // Note: finance_v1 schools don't have change_amount column
     let query = `
       SELECT
         t.id,
@@ -1772,29 +1785,32 @@ export const getTransactionList = async (req, res) => {
         TRIM(CONCAT_WS(' ', s.firstname, s.middlename, s.lastname)) as full_name,
         t.studname,
         t.glevel as grade_level,
-        t.totalamount,
+        t.amountpaid as totalamount,
+        t.totalamount as original_totalamount,
         t.amountpaid,
         t.amounttendered,
         NULL as change_amount,
-        NULL as payment_type,
+        COALESCE(pt.description, t.paytype, 'N/A') as payment_type,
         term.description as terminal,
         term.owner as cashier,
         t.transby,
-        TRIM(CONCAT_WS(' ', tr.lastname, tr.firstname, tr.middlename)) as transacted_by,
+        COALESCE(u.name, TRIM(CONCAT_WS(' ', tr.lastname, tr.firstname, tr.middlename))) as transacted_by,
         t.cancelled,
         t.cancelledremarks,
         t.posted,
         GROUP_CONCAT(DISTINCT ic.description ORDER BY ic.description SEPARATOR ', ') as items
       FROM chrngtrans t
       LEFT JOIN studinfo s ON t.studid = s.id
+      LEFT JOIN users u ON t.transby = u.id
       LEFT JOIN teacher tr ON t.transby = tr.userid
       LEFT JOIN chrngterminals term ON t.terminalno = term.id
+      LEFT JOIN paymenttype pt ON t.paytype = pt.description
       LEFT JOIN chrngtransdetail ti ON t.id = ti.chrngtransid
       LEFT JOIN itemclassification ic ON ti.classid = ic.id
-      WHERE t.syid = ? AND t.semid = ?
+      WHERE 1=1
     `;
 
-    const params = [syid || 0, semid || 0];
+    const params = [];
 
     if (startDate) {
       query += ` AND DATE(t.transdate) >= ?`;
@@ -1806,12 +1822,10 @@ export const getTransactionList = async (req, res) => {
       params.push(endDate);
     }
 
-    // Note: v1 databases don't have paymenttype_id column
-    // Payment type filtering is not supported for v1 schools
-    // if (paymentTypeId) {
-    //   query += ` AND t.paymenttype_id = ?`;
-    //   params.push(paymentTypeId);
-    // }
+    if (paymentTypeId) {
+      query += ` AND pt.id = ?`;
+      params.push(paymentTypeId);
+    }
 
     if (terminalId) {
       query += ` AND t.terminalno = ?`;
@@ -1828,10 +1842,10 @@ export const getTransactionList = async (req, res) => {
 
     query += `
       GROUP BY t.id, t.ornum, t.transdate, t.studid, s.sid, s.firstname, s.middlename, s.lastname,
-               t.studname, t.glevel, t.transby, tr.lastname, tr.firstname, tr.middlename,
+               t.studname, t.glevel, t.transby, u.name, tr.lastname, tr.firstname, tr.middlename,
                t.totalamount, t.amountpaid, t.amounttendered,
-               term.description, term.owner, t.cancelled, t.cancelledremarks, t.posted
-      ORDER BY t.transdate DESC, t.id DESC
+               pt.description, t.paytype, term.description, term.owner, t.cancelled, t.cancelledremarks, t.posted
+      ORDER BY t.ornum ASC
     `;
 
     const [transactions] = await db.execute(query, params);
@@ -1963,27 +1977,32 @@ const buildProcessedPayments = (rows) => {
   const transactions = new Map();
 
   rows.forEach((row) => {
-    const transno = row.transno;
-    if (!transactions.has(transno)) {
-      transactions.set(transno, {
-        transno,
+    const transactionKey = row.transaction_key || row.ornum || row.transno;
+    const sourceTransno = row.transno || transactionKey;
+
+    if (!transactions.has(transactionKey)) {
+      transactions.set(transactionKey, {
+        transno: transactionKey,
         ornum: row.ornum,
         transdate: row.transdate,
         trans_day: normalizeDateKey(row.trans_day),
-        amountpaid: toNumber(row.amountpaid),
+        amountpaid: 0,
         payment_type: row.payment_type || 'N/A',
         paymenttype_id: row.paymenttype_id || null,
+        paidTransnos: new Set(),
         items: [],
       });
     }
 
-    const transaction = transactions.get(transno);
-    transaction.amountpaid = Math.max(
-      transaction.amountpaid,
-      toNumber(row.amountpaid)
-    );
+    const transaction = transactions.get(transactionKey);
+    if (!transaction.paidTransnos.has(sourceTransno)) {
+      transaction.amountpaid += toNumber(row.amountpaid);
+      transaction.paidTransnos.add(sourceTransno);
+    }
+
     transaction.items.push({
-      transno,
+      transno: transactionKey,
+      source_transno: sourceTransno,
       ornum: row.ornum,
       transdate: row.transdate,
       trans_day: normalizeDateKey(row.trans_day),
@@ -2137,45 +2156,358 @@ const buildDailyCashAggregations = ({ transactions, processedItems }) => {
   return { byDay, byClassification, byPaymentType };
 };
 
-const fetchDailyCashRows = async (db, { startDate, endDate, paymentTypeId }) => {
-  const params = [startDate, endDate];
-  // Note: v1 schools use chrngtransdetail instead of chrngcashtrans
-  let query = `
+const normalizeV1ParticularsExpression = `
+  CASE
+    WHEN cct.particulars LIKE '%TUITION%' THEN 'TUITION'
+    WHEN cct.particulars LIKE '%Balance forwarded from SY%' THEN 'BALANCE FORWARDED'
+    ELSE cct.particulars
+  END
+`;
+
+const normalizeV1LedgerParticularsExpression = `
+  CASE
+    WHEN ledger_item.particulars LIKE '%TUITION%' THEN 'TUITION'
+    WHEN ledger_item.particulars LIKE '%Balance forwarded from SY%' THEN 'BALANCE FORWARDED'
+    WHEN ledger_item.particulars IS NOT NULL THEN ledger_item.particulars
+    WHEN slp.particulars LIKE 'PAYMENT FOR % - OR:%' THEN TRIM(SUBSTRING_INDEX(SUBSTRING(slp.particulars, 13), ' - OR:', 1))
+    ELSE 'Unclassified Payment'
+  END
+`;
+
+const buildCollectionFilter = ({ paymentTypeId, status, syid }, tableAlias = 'ct') => {
+  const params = [];
+  let clause = '';
+
+  const resolvedStatus = status && status !== 'all' ? status : null;
+  if (resolvedStatus === 'posted') {
+    clause += ` AND ${tableAlias}.posted = 1`;
+  } else if (resolvedStatus === 'pending') {
+    clause += ` AND (${tableAlias}.posted = 0 OR ${tableAlias}.posted IS NULL)`;
+  }
+
+  if (paymentTypeId) {
+    clause += ' AND pt.id = ?';
+    params.push(paymentTypeId);
+  }
+
+  if (syid) {
+    clause += ` AND ${tableAlias}.syid = ?`;
+    params.push(syid);
+  }
+
+  return { clause, params };
+};
+
+const fetchDailyCashRows = async (db, { startDate, endDate, paymentTypeId, status, syid }) => {
+  const filter = buildCollectionFilter({ paymentTypeId, status, syid }, 'ct');
+  const dateParams = [startDate, endDate];
+
+  const cashRowsQuery = `
     SELECT
+      COALESCE(ct.ornum, ct.transno) as transaction_key,
       ct.transno,
       ct.ornum,
       ct.transdate,
-      DATE(ct.transdate) as trans_day,
+      DATE_FORMAT(ct.transdate, '%Y-%m-%d') as trans_day,
       ct.amountpaid,
-      NULL as paymenttype_id,
-      NULL as payment_type,
+      pt.id as paymenttype_id,
+      COALESCE(pt.description, ct.paytype, 'N/A') as payment_type,
       ct.studid,
       s.sid,
-      TRIM(CONCAT_WS(' ', s.lastname, s.firstname, s.middlename)) as student_name,
-      cct.classid,
-      ic.description as classification,
-      NULL as particulars,
+      COALESCE(ct.studname, TRIM(CONCAT_WS(' ', s.lastname, s.firstname, s.middlename))) as student_name,
+      ${normalizeV1ParticularsExpression} as classid,
+      ${normalizeV1ParticularsExpression} as classification,
+      cct.particulars,
       cct.amount
     FROM chrngtrans ct
-    JOIN chrngtransdetail cct ON ct.id = cct.chrngtransid
-    LEFT JOIN itemclassification ic ON cct.classid = ic.id
+    JOIN chrngcashtrans cct ON ct.transno = cct.transno
+    LEFT JOIN paymenttype pt ON ct.paytype = pt.description
+    LEFT JOIN studinfo s ON ct.studid = s.id
+    WHERE ct.cancelled = 0
+      AND cct.deleted = 0
+      AND DATE(ct.transdate) >= ?
+      AND DATE(ct.transdate) <= ?
+      ${filter.clause}
+  `;
+
+  const detailRowsQuery = `
+    SELECT
+      COALESCE(ct.ornum, ct.transno) as transaction_key,
+      ct.transno,
+      ct.ornum,
+      ct.transdate,
+      DATE_FORMAT(ct.transdate, '%Y-%m-%d') as trans_day,
+      ct.amountpaid,
+      pt.id as paymenttype_id,
+      COALESCE(pt.description, ct.paytype, 'N/A') as payment_type,
+      ct.studid,
+      s.sid,
+      COALESCE(ct.studname, TRIM(CONCAT_WS(' ', s.lastname, s.firstname, s.middlename))) as student_name,
+      COALESCE(ctd.classid, ctd.items, 'Unspecified') as classid,
+      CASE
+        WHEN ctd.items LIKE '%TUITION%' THEN 'TUITION'
+        WHEN ctd.items LIKE '%Balance forwarded from SY%' THEN 'BALANCE FORWARDED'
+        ELSE COALESCE(ic.description, ctd.items, 'Unspecified')
+      END as classification,
+      COALESCE(ctd.items, ic.description, 'Unspecified') as particulars,
+      ctd.amount
+    FROM chrngtrans ct
+    JOIN chrngtransdetail ctd ON ct.id = ctd.chrngtransid
+    LEFT JOIN itemclassification ic ON ctd.classid = ic.id
+    LEFT JOIN paymenttype pt ON ct.paytype = pt.description
+    LEFT JOIN studinfo s ON ct.studid = s.id
+    WHERE ct.cancelled = 0
+      AND DATE(ct.transdate) >= ?
+      AND DATE(ct.transdate) <= ?
+      ${filter.clause}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM chrngcashtrans cct
+        WHERE cct.transno = ct.transno
+          AND cct.deleted = 0
+      )
+  `;
+
+  const transItemsRowsQuery = `
+    SELECT
+      COALESCE(ct.ornum, ct.transno) as transaction_key,
+      ct.transno,
+      ct.ornum,
+      ct.transdate,
+      DATE_FORMAT(ct.transdate, '%Y-%m-%d') as trans_day,
+      ct.amountpaid,
+      pt.id as paymenttype_id,
+      COALESCE(pt.description, ct.paytype, 'N/A') as payment_type,
+      ct.studid,
+      s.sid,
+      COALESCE(ct.studname, TRIM(CONCAT_WS(' ', s.lastname, s.firstname, s.middlename))) as student_name,
+      COALESCE(cti.classid, ic.description, 'Unspecified') as classid,
+      CASE
+        WHEN ic.description LIKE '%TUITION%' THEN 'TUITION'
+        WHEN ic.description LIKE '%Balance forwarded from SY%' THEN 'BALANCE FORWARDED'
+        ELSE COALESCE(ic.description, 'Unspecified')
+      END as classification,
+      COALESCE(ic.description, 'Unspecified') as particulars,
+      cti.amount
+    FROM chrngtrans ct
+    JOIN chrngtransitems cti ON ct.id = cti.chrngtransid
+    LEFT JOIN itemclassification ic ON cti.classid = ic.id
+    LEFT JOIN paymenttype pt ON ct.paytype = pt.description
+    LEFT JOIN studinfo s ON ct.studid = s.id
+    WHERE ct.cancelled = 0
+      AND cti.deleted = 0
+      AND DATE(ct.transdate) >= ?
+      AND DATE(ct.transdate) <= ?
+      ${filter.clause}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM chrngcashtrans cct
+        WHERE cct.transno = ct.transno
+          AND cct.deleted = 0
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM chrngtransdetail ctd
+        WHERE ctd.chrngtransid = ct.id
+      )
+  `;
+
+  const ledgerFallbackQuery = `
+    SELECT
+      COALESCE(ct.ornum, ct.transno) as transaction_key,
+      ct.transno,
+      ct.ornum,
+      ct.transdate,
+      DATE_FORMAT(ct.transdate, '%Y-%m-%d') as trans_day,
+      ct.amountpaid,
+      pt.id as paymenttype_id,
+      COALESCE(pt.description, ct.paytype, 'N/A') as payment_type,
+      ct.studid,
+      s.sid,
+      COALESCE(ct.studname, TRIM(CONCAT_WS(' ', s.lastname, s.firstname, s.middlename))) as student_name,
+      COALESCE(ledger_item.classid, CONCAT('ledger-', ct.id)) as classid,
+      ${normalizeV1LedgerParticularsExpression} as classification,
+      ${normalizeV1LedgerParticularsExpression} as particulars,
+      ct.amountpaid as amount
+    FROM chrngtrans ct
+    LEFT JOIN paymenttype pt ON ct.paytype = pt.description
+    LEFT JOIN studinfo s ON ct.studid = s.id
+    LEFT JOIN studledger slp
+      ON slp.id = (
+        SELECT slp_one.id
+        FROM studledger slp_one
+        WHERE slp_one.transid = ct.id
+          AND slp_one.ornum = ct.ornum
+          AND slp_one.payment > 0
+          AND slp_one.deleted = 0
+          AND slp_one.void = 0
+        ORDER BY slp_one.id DESC
+        LIMIT 1
+      )
+    LEFT JOIN studledger ledger_item
+      ON ledger_item.id = (
+        SELECT sli.id
+        FROM studledger sli
+        WHERE sli.studid = ct.studid
+          AND sli.syid = ct.syid
+          AND sli.deleted = 0
+          AND sli.void = 0
+          AND sli.amount > 0
+          AND sli.payment = 0
+        ORDER BY
+          CASE
+            WHEN slp.particulars LIKE '%OTHER FEES%' AND sli.classid IS NOT NULL THEN 0
+            WHEN sli.classid IS NOT NULL THEN 1
+            ELSE 2
+          END,
+          sli.createddatetime DESC,
+          sli.id DESC
+        LIMIT 1
+      )
+    WHERE ct.cancelled = 0
+      AND DATE(ct.transdate) >= ?
+      AND DATE(ct.transdate) <= ?
+      ${filter.clause}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM chrngcashtrans cct
+        WHERE cct.transno = ct.transno
+          AND cct.deleted = 0
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM chrngtransdetail ctd
+        WHERE ctd.chrngtransid = ct.id
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM chrngtransitems cti
+        WHERE cti.chrngtransid = ct.id
+          AND cti.deleted = 0
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM chrngtrans sibling
+        WHERE sibling.id <> ct.id
+          AND sibling.cancelled = 0
+          AND sibling.studid = ct.studid
+          AND COALESCE(sibling.ornum, sibling.transno) = COALESCE(ct.ornum, ct.transno)
+          AND DATE(sibling.transdate) = DATE(ct.transdate)
+          AND (
+            EXISTS (
+              SELECT 1
+              FROM chrngcashtrans sibling_cash
+              WHERE sibling_cash.transno = sibling.transno
+                AND sibling_cash.deleted = 0
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM chrngtransdetail sibling_detail
+              WHERE sibling_detail.chrngtransid = sibling.id
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM chrngtransitems sibling_item
+              WHERE sibling_item.chrngtransid = sibling.id
+                AND sibling_item.deleted = 0
+            )
+          )
+      )
+  `;
+
+  const query = `
+    ${cashRowsQuery}
+    UNION ALL
+    ${detailRowsQuery}
+    UNION ALL
+    ${transItemsRowsQuery}
+    UNION ALL
+    ${ledgerFallbackQuery}
+    ORDER BY ornum ASC, transdate ASC
+  `;
+
+  const params = [
+    ...dateParams,
+    ...filter.params,
+    ...dateParams,
+    ...filter.params,
+    ...dateParams,
+    ...filter.params,
+    ...dateParams,
+    ...filter.params,
+  ];
+
+  const [rows] = await db.execute(query, params);
+
+  if (rows.length > 0) {
+    return rows;
+  }
+
+  // If every transaction is missing item rows, still return a payment-only row
+  // instead of an empty report.
+  let paymentOnlyQuery = `
+    SELECT
+      COALESCE(ct.ornum, ct.transno) as transaction_key,
+      ct.transno,
+      ct.ornum,
+      ct.transdate,
+      DATE_FORMAT(ct.transdate, '%Y-%m-%d') as trans_day,
+      ct.amountpaid,
+      pt.id as paymenttype_id,
+      COALESCE(pt.description, ct.paytype, 'N/A') as payment_type,
+      ct.studid,
+      s.sid,
+      COALESCE(ct.studname, TRIM(CONCAT_WS(' ', s.lastname, s.firstname, s.middlename))) as student_name,
+      CONCAT('payment-', ct.id) as classid,
+      'Unclassified Payment' as classification,
+      'Unclassified Payment' as particulars,
+      ct.amountpaid as amount
+    FROM chrngtrans ct
+    LEFT JOIN paymenttype pt ON ct.paytype = pt.description
     LEFT JOIN studinfo s ON ct.studid = s.id
     WHERE ct.cancelled = 0
       AND DATE(ct.transdate) >= ?
       AND DATE(ct.transdate) <= ?
   `;
 
-  // Note: v1 databases don't have paymenttype_id column
-  // Payment type filtering is not supported for v1 schools
-  // if (paymentTypeId) {
-  //   query += ' AND ct.paymenttype_id = ?';
-  //   params.push(paymentTypeId);
-  // }
+  const paymentOnlyParams = [startDate, endDate];
+  paymentOnlyQuery += filter.clause;
+  paymentOnlyParams.push(...filter.params);
+  paymentOnlyQuery += `
+      AND NOT EXISTS (
+        SELECT 1
+        FROM chrngtrans sibling
+        WHERE sibling.id <> ct.id
+          AND sibling.cancelled = 0
+          AND sibling.studid = ct.studid
+          AND COALESCE(sibling.ornum, sibling.transno) = COALESCE(ct.ornum, ct.transno)
+          AND DATE(sibling.transdate) = DATE(ct.transdate)
+          AND (
+            EXISTS (
+              SELECT 1
+              FROM chrngcashtrans sibling_cash
+              WHERE sibling_cash.transno = sibling.transno
+                AND sibling_cash.deleted = 0
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM chrngtransdetail sibling_detail
+              WHERE sibling_detail.chrngtransid = sibling.id
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM chrngtransitems sibling_item
+              WHERE sibling_item.chrngtransid = sibling.id
+                AND sibling_item.deleted = 0
+            )
+          )
+      )
+  `;
 
-  query += ' ORDER BY ct.transdate DESC, ct.transno DESC, cct.id ASC';
+  paymentOnlyQuery += ' ORDER BY ct.ornum ASC, ct.transdate ASC';
 
-  const [rows] = await db.execute(query, params);
-  return rows;
+  const [paymentOnlyRows] = await db.execute(paymentOnlyQuery, paymentOnlyParams);
+  return paymentOnlyRows;
 };
 
 /**
@@ -2336,6 +2668,142 @@ const buildSummaryFilters = ({ startDate, endDate, paymentTypeId, status }) => {
 // Note: v1 chrngtransdetail doesn't have particulars column, only uses classification
 const normalizeItemLabel = "COALESCE(ic.description, 'Unspecified')";
 
+const buildCollectionSummaryData = (rows) => {
+  const processed = buildProcessedPayments(rows);
+  const byItemMap = new Map();
+  const byMonthMap = new Map();
+  let totalCollections = 0;
+
+  processed.transactions.forEach((transaction) => {
+    const amountPaid = toNumber(transaction.amountpaid);
+    totalCollections += amountPaid;
+
+    const monthKey = normalizeDateKey(transaction.transdate || transaction.trans_day).slice(0, 7);
+    if (!monthKey) return;
+
+    if (!byMonthMap.has(monthKey)) {
+      byMonthMap.set(monthKey, {
+        month_key: monthKey,
+        total_amount: 0,
+        transaction_ids: new Set(),
+      });
+    }
+
+    const monthEntry = byMonthMap.get(monthKey);
+    monthEntry.total_amount += amountPaid;
+    monthEntry.transaction_ids.add(transaction.transno);
+  });
+
+  processed.processedItems.forEach((item) => {
+    const itemLabel = item.classification || item.particulars || 'Unspecified';
+    if (!byItemMap.has(itemLabel)) {
+      byItemMap.set(itemLabel, {
+        item: itemLabel,
+        total_amount: 0,
+        transaction_ids: new Set(),
+      });
+    }
+    const itemEntry = byItemMap.get(itemLabel);
+    itemEntry.total_amount += toNumber(item.paid_amount);
+    itemEntry.transaction_ids.add(item.transno);
+  });
+
+  const byItem = Array.from(byItemMap.values())
+    .map((entry) => ({
+      item: entry.item,
+      total_amount: Number(entry.total_amount.toFixed(2)),
+      transaction_count: entry.transaction_ids.size,
+    }))
+    .sort((a, b) => toNumber(b.total_amount) - toNumber(a.total_amount));
+
+  const byMonth = Array.from(byMonthMap.values())
+    .map((entry) => ({
+      month_key: entry.month_key,
+      total_amount: Number(entry.total_amount.toFixed(2)),
+      transaction_count: entry.transaction_ids.size,
+      month_label: formatMonthLabel(entry.month_key),
+    }))
+    .sort((a, b) => a.month_key.localeCompare(b.month_key));
+
+  return {
+    processed,
+    summary: {
+      transaction_count: processed.transactions.size,
+      line_count: processed.processedItems.length,
+      item_count: byItem.length,
+      total_amount: Number(totalCollections.toFixed(2)),
+    },
+    byItem,
+    byMonth,
+  };
+};
+
+const buildYearlyTableData = (processedItems) => {
+  const itemMap = new Map();
+  const monthSet = new Set();
+
+  processedItems.forEach((item) => {
+    const itemLabel = item.classification || item.particulars || 'Unspecified';
+    const monthKey = normalizeDateKey(item.transdate || item.trans_day).slice(0, 7);
+    const amount = toNumber(item.paid_amount);
+
+    if (!monthKey) return;
+
+    monthSet.add(monthKey);
+
+    if (!itemMap.has(itemLabel)) {
+      itemMap.set(itemLabel, {
+        item: itemLabel,
+        monthly: {},
+        total_amount: 0,
+      });
+    }
+
+    const itemData = itemMap.get(itemLabel);
+    itemData.monthly[monthKey] = toNumber(itemData.monthly[monthKey]) + amount;
+    itemData.total_amount += amount;
+  });
+
+  const months = Array.from(monthSet)
+    .sort()
+    .map((key) => ({ key, label: formatMonthLabel(key) }));
+
+  const items = Array.from(itemMap.values())
+    .map((item) => ({
+      ...item,
+      monthly: Object.fromEntries(
+        Object.entries(item.monthly).map(([key, value]) => [key, Number(toNumber(value).toFixed(2))])
+      ),
+      total_amount: Number(item.total_amount.toFixed(2)),
+    }))
+    .sort((a, b) => toNumber(b.total_amount) - toNumber(a.total_amount));
+
+  return { months, items };
+};
+
+const resolveSchoolYearCollectionRange = async (db, syid, syStart, syEnd) => {
+  const [rangeRows] = await db.execute(
+    `
+      SELECT
+        MIN(DATE(transdate)) as min_date,
+        MAX(DATE(transdate)) as max_date
+      FROM chrngtrans
+      WHERE syid = ? AND cancelled = 0
+    `,
+    [syid]
+  );
+
+  const maxDate = parseDateOnly(rangeRows[0]?.max_date);
+
+  const resolvedEnd =
+    maxDate && maxDate > syEnd ? maxDate : syEnd;
+
+  return {
+    startDate: formatDateKey(syStart),
+    endDate: formatDateKey(resolvedEnd),
+  };
+};
+
 /**
  * Get monthly summary
  */
@@ -2351,66 +2819,23 @@ export const getMonthlySummary = async (req, res) => {
     }
 
     const db = await getSchoolConnection(schoolDbConfig);
-    const { clause, params } = buildSummaryFilters({ startDate, endDate, paymentTypeId, status });
+    const rows = await fetchDailyCashRows(db, {
+      startDate,
+      endDate,
+      paymentTypeId,
+      status,
+    });
 
-    // Note: Using chrngtransdetail for v1 schools
-    const [summaryRows] = await db.execute(
-      `
-        SELECT
-          COUNT(DISTINCT t.transno) as transaction_count,
-          COUNT(cd.id) as line_count,
-          COUNT(DISTINCT ${normalizeItemLabel}) as item_count,
-          SUM(cd.amount) as total_amount
-        FROM chrngtransdetail cd
-        JOIN chrngtrans t ON t.id = cd.chrngtransid
-        LEFT JOIN itemclassification ic ON cd.classid = ic.id
-        WHERE 1=1${clause}
-      `,
-      params
-    );
-
-    const [byItem] = await db.execute(
-      `
-        SELECT
-          ${normalizeItemLabel} as item,
-          SUM(cd.amount) as total_amount,
-          COUNT(DISTINCT t.transno) as transaction_count
-        FROM chrngtransdetail cd
-        JOIN chrngtrans t ON t.id = cd.chrngtransid
-        LEFT JOIN itemclassification ic ON cd.classid = ic.id
-        WHERE 1=1${clause}
-        GROUP BY item
-        ORDER BY total_amount DESC
-      `,
-      params
-    );
-
-    const [byMonth] = await db.execute(
-      `
-        SELECT
-          DATE_FORMAT(t.transdate, '%Y-%m') as month_key,
-          SUM(cd.amount) as total_amount,
-          COUNT(DISTINCT t.transno) as transaction_count
-        FROM chrngtransdetail cd
-        JOIN chrngtrans t ON t.id = cd.chrngtransid
-        WHERE 1=1${clause}
-        GROUP BY month_key
-        ORDER BY month_key
-      `,
-      params
-    );
+    const { summary, byItem, byMonth } = buildCollectionSummaryData(rows);
 
     await db.end();
 
     res.status(200).json({
       status: 'success',
       data: {
-        summary: summaryRows[0] || null,
+        summary,
         byItem,
-        byMonth: byMonth.map((item) => ({
-          ...item,
-          month_label: formatMonthLabel(item.month_key),
-        })),
+        byMonth,
       },
     });
   } catch (error) {
@@ -2438,23 +2863,13 @@ export const getMonthlySummaryItems = async (req, res) => {
     }
 
     const db = await getSchoolConnection(schoolDbConfig);
-    const { clause, params } = buildSummaryFilters({ startDate, endDate, paymentTypeId, status });
-
-    const [byItem] = await db.execute(
-      `
-        SELECT
-          ${normalizeItemLabel} as item,
-          SUM(cd.amount) as total_amount,
-          COUNT(DISTINCT t.transno) as transaction_count
-        FROM chrngtransdetail cd
-        JOIN chrngtrans t ON t.id = cd.chrngtransid
-        LEFT JOIN itemclassification ic ON cd.classid = ic.id
-        WHERE 1=1${clause}
-        GROUP BY item
-        ORDER BY total_amount DESC
-      `,
-      params
-    );
+    const rows = await fetchDailyCashRows(db, {
+      startDate,
+      endDate,
+      paymentTypeId,
+      status,
+    });
+    const { byItem } = buildCollectionSummaryData(rows);
 
     await db.end();
 
@@ -2524,62 +2939,15 @@ export const getYearlySummary = async (req, res) => {
       });
     }
 
-    const startDate = formatDateKey(syStart);
-    const endDate = formatDateKey(syEnd);
-    const { clause, params } = buildSummaryFilters({
+    const { startDate, endDate } = await resolveSchoolYearCollectionRange(db, syid, syStart, syEnd);
+    const rows = await fetchDailyCashRows(db, {
       startDate,
       endDate,
       paymentTypeId,
       status,
+      syid,
     });
-
-    const baseParams = [syid, ...params];
-
-    const [summaryRows] = await db.execute(
-      `
-        SELECT
-          COUNT(DISTINCT t.transno) as transaction_count,
-          COUNT(cd.id) as line_count,
-          COUNT(DISTINCT ${normalizeItemLabel}) as item_count,
-          SUM(cd.amount) as total_amount
-        FROM chrngtransdetail cd
-        JOIN chrngtrans t ON t.id = cd.chrngtransid
-        LEFT JOIN itemclassification ic ON cd.classid = ic.id
-        WHERE 1=1 AND t.syid = ?${clause}
-      `,
-      baseParams
-    );
-
-    const [byMonth] = await db.execute(
-      `
-        SELECT
-          DATE_FORMAT(t.transdate, '%Y-%m') as month_key,
-          SUM(cd.amount) as total_amount,
-          COUNT(DISTINCT t.transno) as transaction_count
-        FROM chrngtransdetail cd
-        JOIN chrngtrans t ON t.id = cd.chrngtransid
-        WHERE 1=1 AND t.syid = ?${clause}
-        GROUP BY month_key
-        ORDER BY month_key
-      `,
-      baseParams
-    );
-
-    const [byItem] = await db.execute(
-      `
-        SELECT
-          ${normalizeItemLabel} as item,
-          SUM(cd.amount) as total_amount,
-          COUNT(DISTINCT t.transno) as transaction_count
-        FROM chrngtransdetail cd
-        JOIN chrngtrans t ON t.id = cd.chrngtransid
-        LEFT JOIN itemclassification ic ON cd.classid = ic.id
-        WHERE 1=1 AND t.syid = ?${clause}
-        GROUP BY item
-        ORDER BY total_amount DESC
-      `,
-      baseParams
-    );
+    const { summary, byMonth, byItem } = buildCollectionSummaryData(rows);
 
     await db.end();
 
@@ -2592,11 +2960,8 @@ export const getYearlySummary = async (req, res) => {
           startDate,
           endDate,
         },
-        summary: summaryRows[0] || null,
-        byMonth: byMonth.map((item) => ({
-          ...item,
-          month_label: formatMonthLabel(item.month_key),
-        })),
+        summary,
+        byMonth,
         byItem,
       },
     });
@@ -2658,66 +3023,16 @@ export const getYearlySummaryTable = async (req, res) => {
       });
     }
 
-    const startDate = formatDateKey(syStart);
-    const endDate = formatDateKey(syEnd);
-    const { clause, params } = buildSummaryFilters({
+    const { startDate, endDate } = await resolveSchoolYearCollectionRange(db, syid, syStart, syEnd);
+    const rows = await fetchDailyCashRows(db, {
       startDate,
       endDate,
       paymentTypeId,
       status,
+      syid,
     });
-
-    const baseParams = [syid, ...params];
-
-    const [rows] = await db.execute(
-      `
-        SELECT
-          ${normalizeItemLabel} as item,
-          DATE_FORMAT(t.transdate, '%Y-%m') as month_key,
-          SUM(cd.amount) as amount
-        FROM chrngtransdetail cd
-        JOIN chrngtrans t ON t.id = cd.chrngtransid
-        LEFT JOIN itemclassification ic ON cd.classid = ic.id
-        WHERE 1=1 AND t.syid = ?${clause}
-        GROUP BY item, month_key
-        ORDER BY item, month_key
-      `,
-      baseParams
-    );
-
-    const itemMap = new Map();
-    const monthSet = new Set();
-
-    rows.forEach((row) => {
-      const itemLabel = row.item || 'Unspecified';
-      const monthKey = row.month_key;
-      const amount = toNumber(row.amount);
-
-      monthSet.add(monthKey);
-
-      if (!itemMap.has(itemLabel)) {
-        itemMap.set(itemLabel, {
-          item: itemLabel,
-          monthly: {},
-          total_amount: 0,
-        });
-      }
-
-      const itemData = itemMap.get(itemLabel);
-      itemData.monthly[monthKey] = amount;
-      itemData.total_amount += amount;
-    });
-
-    const months = Array.from(monthSet)
-      .sort()
-      .map((key) => ({ key, label: formatMonthLabel(key) }));
-
-    const items = Array.from(itemMap.values())
-      .map((item) => ({
-        ...item,
-        total_amount: Number(item.total_amount.toFixed(2)),
-      }))
-      .sort((a, b) => b.total_amount - a.total_amount);
+    const processed = buildProcessedPayments(rows);
+    const { months, items } = buildYearlyTableData(processed.processedItems);
 
     await db.end();
 

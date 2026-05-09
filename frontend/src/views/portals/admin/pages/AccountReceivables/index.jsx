@@ -53,7 +53,7 @@ export default function AccountReceivables() {
   const [listLoading, setListLoading] = useState(false);
 
   const [selectedSy, setSelectedSy] = useState('');
-  const [selectedSem, setSelectedSem] = useState(isFinanceV1 ? 'all' : '');
+  const [selectedSem, setSelectedSem] = useState('');
   const [selectedProgram, setSelectedProgram] = useState('all');
   const [selectedLevel, setSelectedLevel] = useState('all');
   const [selectedSection, setSelectedSection] = useState('all');
@@ -180,15 +180,13 @@ export default function AccountReceivables() {
       const result = await response.json();
       if (response.ok && result.status === 'success') {
         setSemesters(result.data || []);
-        // For finance_v1, default to "All" (matches PHP default() behavior - no semester filter)
-        // For non-v1, auto-select the active semester
-        if (!isFinanceV1) {
-          const active = result.data.find((sem) => sem.isactive === 1);
-          if (active) {
-            setSelectedSem(active.id.toString());
-          } else if (result.data.length > 0) {
-            setSelectedSem(result.data[0].id.toString());
-          }
+        const active = result.data.find((sem) => sem.isactive === 1);
+        if (active) {
+          setSelectedSem(active.id.toString());
+        } else if (result.data.length > 0) {
+          setSelectedSem(result.data[0].id.toString());
+        } else if (isFinanceV1) {
+          setSelectedSem('all');
         }
       }
     } catch (error) {

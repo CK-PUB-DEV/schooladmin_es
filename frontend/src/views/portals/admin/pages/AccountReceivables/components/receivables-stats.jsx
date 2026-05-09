@@ -20,6 +20,9 @@ export function ReceivablesStats({ data }) {
   const balanceTiers = data.balanceTiers || [];
   const bySchoolYear = data.bySchoolYear || [];
 
+  const hasAssessmentTotals = summary.total_assessment !== undefined;
+  const totalAssessment = Number(summary.total_assessment) || 0;
+  const totalPayment = Number(summary.total_payment) || 0;
   const totalReceivable = Number(summary.total_receivable) || 0;
   const totalStudents = Number(summary.total_students) || 0;
   const studentsWithBalance = Number(summary.students_with_balance) || 0;
@@ -47,26 +50,40 @@ export function ReceivablesStats({ data }) {
           <Card data-watermark="AR">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium">Receivables Overview</CardTitle>
-              <p className="text-xs text-muted-foreground">Outstanding balances across students</p>
+              <p className="text-xs text-muted-foreground">
+                {hasAssessmentTotals ? 'Assessment and payment totals' : 'Outstanding balances across students'}
+              </p>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="rounded-xl border bg-gradient-to-br from-emerald-500/10 via-transparent to-emerald-500/5 p-4">
-                <div className="text-xs text-muted-foreground">Total receivables</div>
+                <div className="text-xs text-muted-foreground">
+                  {hasAssessmentTotals ? 'Total assessment' : 'Total receivables'}
+                </div>
                 <div className="text-3xl font-semibold tracking-tight">
-                  {formatCurrency(totalReceivable)}
+                  {formatCurrency(hasAssessmentTotals ? totalAssessment : totalReceivable)}
                 </div>
                 <div className="mt-2 text-xs text-muted-foreground">
-                  {formatNumber(studentsWithBalance)} students with balance
+                  {hasAssessmentTotals
+                    ? `${formatNumber(totalStudents)} students`
+                    : `${formatNumber(studentsWithBalance)} students with balance`}
                 </div>
               </div>
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-lg border bg-background/60 px-3 py-2">
-                  <div className="text-xs text-muted-foreground">Total students</div>
-                  <div className="text-sm font-semibold">{formatNumber(totalStudents)}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {hasAssessmentTotals ? 'Total payment' : 'Total students'}
+                  </div>
+                  <div className="text-sm font-semibold">
+                    {hasAssessmentTotals ? formatCurrency(totalPayment) : formatNumber(totalStudents)}
+                  </div>
                 </div>
                 <div className="rounded-lg border bg-background/60 px-3 py-2">
-                  <div className="text-xs text-muted-foreground">Average balance</div>
-                  <div className="text-sm font-semibold">{formatCurrency(averageBalance)}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {hasAssessmentTotals ? 'Balance' : 'Average balance'}
+                  </div>
+                  <div className="text-sm font-semibold">
+                    {hasAssessmentTotals ? formatCurrency(totalReceivable) : formatCurrency(averageBalance)}
+                  </div>
                 </div>
                 <div className="rounded-lg border bg-background/60 px-3 py-2">
                   <div className="text-xs text-muted-foreground">Overpayments</div>
