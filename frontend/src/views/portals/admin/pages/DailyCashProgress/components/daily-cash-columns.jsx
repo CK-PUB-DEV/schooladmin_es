@@ -18,6 +18,17 @@ const formatDateTime = (dateString) => {
 
 export const dailyCashColumns = [
   {
+    id: 'index',
+    header: '#',
+    cell: ({ row, table }) => {
+      const sortedRows = table.getSortedRowModel().rows;
+      const index = sortedRows.findIndex((r) => r.id === row.id);
+      return <div className="text-xs text-muted-foreground w-6 text-center">{index + 1}</div>;
+    },
+    enableSorting: false,
+    enableHiding: false,
+  },
+  {
     id: 'expand',
     header: '',
     cell: ({ row }) => {
