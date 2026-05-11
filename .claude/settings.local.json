@@ -41,7 +41,8 @@
       "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; SELECT * FROM chrngterminals LIMIT 5;\")",
       "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; SELECT COUNT\\(*\\) as total FROM chrngtrans WHERE cancelled = 0;\")",
       "Bash(grep:*)",
-      "Bash(node --check:*)"
+      "Bash(node --check:*)",
+      "Bash(Get-ChildItem -Path \"c:\\\\laragon\\\\www\\\\schooladmin_es\\\\frontend\\\\src\\\\views\\\\portals\\\\admin\" -Recurse -Include \"*.tsx\", \"*.ts\", \"*.jsx\", \"*.js\")"
     ]
   }
 }

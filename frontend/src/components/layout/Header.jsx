@@ -39,18 +39,18 @@ export function Header({ className, fixed = true, children, ...props }) {
             'after:absolute after:inset-0 after:-z-10 after:bg-background/20 after:backdrop-blur-lg'
         )}
       >
-        <SidebarTrigger variant='outline' className='max-md:scale-125' />
-        <Separator orientation='vertical' className='h-6' />
-        {children}
-        <div className='ms-auto flex items-center gap-2'>
+        <SidebarTrigger variant='outline' className='max-md:scale-125 shrink-0' />
+        <Separator orientation='vertical' className='h-6 shrink-0' />
+        <div className='flex-1 min-w-0'>{children}</div>
+        <div className='ms-auto flex shrink-0 items-center gap-2'>
           <Button
             variant='outline'
-            className='relative h-9 w-full justify-start rounded-md text-sm text-muted-foreground sm:pe-12 md:w-40 lg:w-64'
+            className='relative h-9 w-9 justify-center rounded-md text-sm text-muted-foreground sm:w-auto sm:justify-start sm:pe-12 md:w-40 lg:w-64'
             onClick={() => setOpen(true)}
           >
-            <Search className='me-2 h-4 w-4' />
+            <Search className='h-4 w-4 shrink-0 sm:me-2' />
+            <span className='hidden sm:inline-flex lg:hidden'>Search</span>
             <span className='hidden lg:inline-flex'>Search...</span>
-            <span className='inline-flex lg:hidden'>Search</span>
             <kbd className='pointer-events-none absolute end-1.5 top-2 hidden h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium opacity-100 sm:flex'>
               <span className='text-xs'>⌘</span>K
             </kbd>

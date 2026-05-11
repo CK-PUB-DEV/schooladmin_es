@@ -37,7 +37,7 @@ export function WeeklyAttendanceTable({ rows, days, loading }) {
   }
 
   return (
-    <div className="rounded-xl border bg-background/60">
+    <div className="overflow-x-auto rounded-xl border bg-background/60">
       <Table>
         <TableHeader>
           <TableRow>

@@ -20,8 +20,9 @@ import {
 } from '../../../../../../components/ui/table';
 import { Input } from '../../../../../../components/ui/input';
 import { Button } from '../../../../../../components/ui/button';
-import { Search, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
+import { Search, ChevronDown } from 'lucide-react';
 import { dailyCashColumns } from './daily-cash-columns';
+import { TablePaginationBar } from '../../../../../../components/ui/data-table-view';
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(Number(value) || 0);
@@ -281,10 +282,10 @@ export function DailyCashTable({ data, loading }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2 flex-1">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2">
           <div className="relative flex-1 max-w-sm">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Search OR, student, or item..."
               value={globalFilter ?? ''}
@@ -296,7 +297,7 @@ export function DailyCashTable({ data, loading }) {
             {expandAllDetails ? 'Collapse all' : 'View all'}
           </Button>
         </div>
-        <div className="flex items-center gap-4 text-sm">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
           <div className="text-muted-foreground">
             <span className="font-medium text-foreground">{filteredRows.length}</span>{' '}
             transactions
@@ -316,7 +317,7 @@ export function DailyCashTable({ data, loading }) {
         </div>
       </div>
 
-      <div className="rounded-md border bg-background">
+      <div className="overflow-x-auto rounded-md border bg-background">
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
@@ -377,52 +378,7 @@ export function DailyCashTable({ data, loading }) {
         </Table>
       </div>
 
-      <div className="flex items-center justify-between px-2">
-        <div className="flex-1 text-sm text-muted-foreground">
-          Showing {table.getState().pagination.pageIndex + 1} of {table.getPageCount()} pages
-        </div>
-        <div className="flex items-center space-x-6 lg:space-x-8">
-          <div className="flex items-center space-x-2">
-            <p className="text-sm font-medium">Rows per page</p>
-            <select
-              className="h-8 w-[70px] rounded-md border border-input bg-background px-2 text-sm"
-              value={table.getState().pagination.pageSize}
-              onChange={(e) => {
-                table.setPageSize(Number(e.target.value));
-              }}
-            >
-              {[10, 20, 30, 40, 50, 100].map((pageSize) => (
-                <option key={pageSize} value={pageSize}>
-                  {pageSize}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex w-[100px] items-center justify-center text-sm font-medium">
-            Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
-          </div>
-          <div className="flex items-center space-x-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => table.previousPage()}
-              disabled={!table.getCanPreviousPage()}
-            >
-              <ChevronLeft className="h-4 w-4" />
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => table.nextPage()}
-              disabled={!table.getCanNextPage()}
-            >
-              Next
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      </div>
+      <TablePaginationBar table={table} />
     </div>
   );
 }

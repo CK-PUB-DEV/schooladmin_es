@@ -16,7 +16,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const CORS_ORIGIN = 'https://schooladmin.essentiel.ph';
+const CORS_ORIGIN = ' http://localhost:5173';
 
 // CORS configuration
 const corsOptions = {

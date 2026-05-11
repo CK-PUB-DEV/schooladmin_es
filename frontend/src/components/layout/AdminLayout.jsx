@@ -197,14 +197,19 @@ export function AdminLayout() {
               )}
             >
               <Header>
-                <div className='flex items-center gap-3'>
-                  <h1 className='text-lg font-semibold'>
-                    {selectedSchool?.school_name || 'Dashboard'}
+                <div className='flex min-w-0 items-center gap-2 sm:gap-3'>
+                  <h1 className='truncate text-sm font-semibold sm:text-lg'>
+                    <span className='sm:hidden'>
+                      {selectedSchool?.abbrv || selectedSchool?.school_name || 'Dashboard'}
+                    </span>
+                    <span className='hidden sm:inline'>
+                      {selectedSchool?.school_name || 'Dashboard'}
+                    </span>
                   </h1>
                   {activePeriod.sy && (
                     <>
-                      <Separator orientation='vertical' className='h-6' />
-                      <div className='text-sm'>
+                      <Separator orientation='vertical' className='hidden md:block h-6 shrink-0' />
+                      <div className='hidden md:block text-sm shrink-0'>
                         <span className='font-bold text-muted-foreground'>ACTIVE:</span>{' '}
                         <span className='font-semibold'>
                           {activePeriod.sy.sydesc}
