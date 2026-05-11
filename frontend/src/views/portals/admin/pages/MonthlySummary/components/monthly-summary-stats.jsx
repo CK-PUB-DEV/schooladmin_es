@@ -22,7 +22,7 @@ export function MonthlySummaryStats({ data, monthLabel }) {
   const averagePerTransaction = transactionCount > 0 ? totalAmount / transactionCount : 0;
   const averagePerItem = itemCount > 0 ? totalAmount / itemCount : 0;
 
-  const topItems = byItem.slice(0, 5);
+  const topItems = byItem;
   const itemTotal = byItem.reduce((sum, item) => sum + toNumber(item.total_amount), 0);
   const monthMax = Math.max(0, ...byMonth.map((item) => toNumber(item.total_amount)));
 
@@ -45,7 +45,7 @@ export function MonthlySummaryStats({ data, monthLabel }) {
                   {formatNumber(transactionCount)} transactions
                 </div>
               </div>
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-3" hidden>
                 <div className="rounded-lg border bg-background/60 px-3 py-2">
                   <div className="text-xs text-muted-foreground">Distinct items</div>
                   <div className="text-sm font-semibold">{formatNumber(itemCount)}</div>

@@ -24,7 +24,7 @@ export function DailyCashStats({ data }) {
   const totalOverpayment = Number(summary.total_overpayment) || 0;
   const overpaymentCount = Number(summary.overpayment_count) || 0;
 
-  const topClassifications = byClassification.slice(0, 5);
+  const topClassifications = byClassification;
   const topPaymentTypes = byPaymentType.slice(0, 4);
   const maxDailyAmount = Math.max(
     0,
@@ -50,22 +50,7 @@ export function DailyCashStats({ data }) {
                   {formatNumber(totalTransactions)} transactions
                 </div>
               </div>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-lg border bg-background/60 px-3 py-2">
-                  <div className="text-xs text-muted-foreground">Items recorded</div>
-                  <div className="text-sm font-semibold">{formatNumber(totalItems)}</div>
-                </div>
-                <div className="rounded-lg border bg-background/60 px-3 py-2">
-                  <div className="text-xs text-muted-foreground">Avg per transaction</div>
-                  <div className="text-sm font-semibold">
-                    {formatCurrency(averagePerTransaction)}
-                  </div>
-                </div>
-                <div className="rounded-lg border bg-background/60 px-3 py-2">
-                  <div className="text-xs text-muted-foreground">Avg per item</div>
-                  <div className="text-sm font-semibold">{formatCurrency(averagePerItem)}</div>
-                </div>
-              </div>
+              {/* Stats grid hidden temporarily */}
             </CardContent>
           </Card>
 

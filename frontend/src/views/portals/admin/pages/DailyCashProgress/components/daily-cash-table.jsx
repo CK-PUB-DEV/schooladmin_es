@@ -149,7 +149,7 @@ function ClassificationBreakdown({ items, overpayment, expandAll }) {
 export function DailyCashTable({ data, loading }) {
   const [columnVisibility, setColumnVisibility] = useState({});
   const [columnFilters, setColumnFilters] = useState([]);
-  const [sorting, setSorting] = useState([{ id: 'transdate', desc: true }]);
+  const [sorting, setSorting] = useState([{ id: 'ornum', desc: false }]);
   const [globalFilter, setGlobalFilter] = useState('');
   const [expanded, setExpanded] = useState({});
   const [expandAllDetails, setExpandAllDetails] = useState(false);

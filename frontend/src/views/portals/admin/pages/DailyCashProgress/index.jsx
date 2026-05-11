@@ -226,9 +226,37 @@ export default function DailyCashProgress() {
       return;
     }
 
-    const headers = Object.keys(items[0]).join(',');
+    const columns = [
+      { label: 'OR Number', key: 'ornum' },
+      { label: 'Date & Time', key: 'transdate' },
+      { label: 'Student Name', key: 'student_name' },
+      { label: 'SID', key: 'sid' },
+      { label: 'Classification', key: 'classification' },
+      { label: 'Particulars', key: 'particulars' },
+      { label: 'Amount', key: 'amount' },
+      { label: 'Paid Amount', key: 'paid_amount' },
+      { label: 'Overpayment', key: 'overpayment' },
+      { label: 'Payment Type', key: 'payment_type' },
+    ];
+
+    const formatExportDate = (val) => {
+      if (!val) return '';
+      const d = new Date(val);
+      if (isNaN(d)) return val;
+      return d.toLocaleString('en-PH', {
+        month: 'short', day: 'numeric', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: true,
+      });
+    };
+
+    const headers = columns.map((col) => `"${col.label}"`).join(',');
     const rows = items.map((row) =>
-      Object.values(row).map((val) => `"${val ?? ''}"`).join(',')
+      columns.map((col) => {
+        const val = row[col.key] ?? '';
+        if (col.key === 'ornum' || col.key === 'sid') return `="${val}"`;
+        if (col.key === 'transdate') return `"${formatExportDate(val)}"`;
+        return `"${val}"`;
+      }).join(',')
     );
     const csvContent = [headers, ...rows].join('\n');
 
