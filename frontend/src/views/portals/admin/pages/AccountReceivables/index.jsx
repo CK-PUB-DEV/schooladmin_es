@@ -6,19 +6,9 @@ import { Button } from '../../../../../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../../../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../../../../components/ui/tabs';
 import { Input } from '../../../../../components/ui/input';
-import { RefreshCcw, Download, Calendar } from 'lucide-react';
+import { RefreshCcw, Download } from 'lucide-react';
 import { ReceivablesStats } from './components/receivables-stats';
 import { ReceivablesTable } from './components/receivables-table';
-
-// Date filter shortcut options
-const DATE_FILTER_OPTIONS = [
-  { value: 'all', label: 'All Time' },
-  { value: '30days', label: 'Last 30 Days' },
-  { value: '60days', label: 'Last 60 Days' },
-  { value: '90days', label: 'Last 90 Days' },
-  { value: '1year', label: 'Last Year' },
-  { value: 'custom', label: 'Custom Range' },
-];
 
 const PER_PAGE = 200;
 
@@ -59,7 +49,6 @@ export default function AccountReceivables() {
   const [selectedSection, setSelectedSection] = useState('all');
   const [selectedGrantee, setSelectedGrantee] = useState('all');
   const [selectedMode, setSelectedMode] = useState('all');
-  const [dateFilter, setDateFilter] = useState('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
@@ -80,11 +69,7 @@ export default function AccountReceivables() {
   useEffect(() => {
     if (!selectedSy || !selectedSem) return;
 
-    if (isFinanceV1) {
-      if ((startDate && !endDate) || (!startDate && endDate)) return;
-    } else if (dateFilter === 'custom' && (!startDate || !endDate)) {
-      return;
-    }
+    if ((startDate && !endDate) || (!startDate && endDate)) return;
 
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
@@ -109,7 +94,6 @@ export default function AccountReceivables() {
     selectedSection,
     selectedGrantee,
     selectedMode,
-    dateFilter,
     startDate,
     endDate,
   ]);
@@ -272,9 +256,9 @@ export default function AccountReceivables() {
       payload.startDate = startDate || null;
       payload.endDate = endDate || null;
     } else {
-      payload.dateFilter = dateFilter === 'all' ? null : dateFilter;
-      payload.startDate = dateFilter === 'custom' ? startDate : null;
-      payload.endDate = dateFilter === 'custom' ? endDate : null;
+      payload.dateFilter = null;
+      payload.startDate = startDate || null;
+      payload.endDate = endDate || null;
     }
 
     return { ...payload, ...extra };
@@ -713,50 +697,28 @@ export default function AccountReceivables() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="w-[160px]">
+                <div className="w-[140px]">
                   <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
-                    <Calendar className="h-3 w-3 inline mr-1" />
-                    Date Filter
+                    Start Date
                   </label>
-                  <Select value={dateFilter} onValueChange={setDateFilter}>
-                    <SelectTrigger className="w-full h-9">
-                      <SelectValue placeholder="All Time" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {DATE_FILTER_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="h-9"
+                  />
                 </div>
-                {dateFilter === 'custom' && (
-                  <>
-                    <div className="w-[140px]">
-                      <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
-                        Start Date
-                      </label>
-                      <Input
-                        type="date"
-                        value={startDate}
-                        onChange={(e) => setStartDate(e.target.value)}
-                        className="h-9"
-                      />
-                    </div>
-                    <div className="w-[140px]">
-                      <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
-                        End Date
-                      </label>
-                      <Input
-                        type="date"
-                        value={endDate}
-                        onChange={(e) => setEndDate(e.target.value)}
-                        className="h-9"
-                      />
-                    </div>
-                  </>
-                )}
+                <div className="w-[140px]">
+                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                    End Date
+                  </label>
+                  <Input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="h-9"
+                  />
+                </div>
                 <Button variant="outline" size="sm" onClick={handleExport} className="h-9">
                   <Download className="h-4 w-4 mr-2" />
                   Export

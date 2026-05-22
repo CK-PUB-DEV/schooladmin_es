@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { RefreshCcw, Download, Calendar as CalendarIcon } from 'lucide-react';
+import { RefreshCcw, Download } from 'lucide-react';
 import { apiUrl } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -9,13 +9,6 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AttendanceTable } from './components/attendance-table';
 import { WeeklyAttendanceTable } from './components/weekly-attendance-table';
-
-const DATE_RANGE_PRESETS = [
-  { label: 'Today', value: 'today', days: 0 },
-  { label: 'Last 7 Days', value: '7days', days: 7 },
-  { label: 'Last 30 Days', value: '30days', days: 30 },
-  { label: 'Last 60 Days', value: '60days', days: 60 },
-];
 
 const formatDateInput = (date) => {
   const year = date.getFullYear();
@@ -155,9 +148,8 @@ export default function EmployeeAttendance() {
   const [loading, setLoading] = useState(false);
   const [selectedUserType, setSelectedUserType] = useState('all');
   const [selectedTapState, setSelectedTapState] = useState('all');
-  const [selectedDateRange, setSelectedDateRange] = useState('30days');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  const [startDate, setStartDate] = useState(formatDateInput(new Date()));
+  const [endDate, setEndDate] = useState(formatDateInput(new Date()));
 
   const [weeklyLogs, setWeeklyLogs] = useState([]);
   const [weeklyLoading, setWeeklyLoading] = useState(false);
@@ -188,25 +180,6 @@ export default function EmployeeAttendance() {
     }
     fetchUserTypes();
   }, []);
-
-  useEffect(() => {
-    if (selectedDateRange === 'custom') return;
-
-    const preset = DATE_RANGE_PRESETS.find((item) => item.value === selectedDateRange);
-    if (!preset) return;
-
-    const end = new Date();
-    const start = new Date();
-
-    if (preset.days === 0) {
-      start.setHours(0, 0, 0, 0);
-    } else {
-      start.setDate(end.getDate() - preset.days);
-    }
-
-    setStartDate(formatDateInput(start));
-    setEndDate(formatDateInput(end));
-  }, [selectedDateRange]);
 
   useEffect(() => {
     if (!startDate || !endDate) return;
@@ -609,54 +582,30 @@ export default function EmployeeAttendance() {
                 </Button>
               </div>
 
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-sm font-medium text-muted-foreground">Quick Filter:</span>
-                {DATE_RANGE_PRESETS.map((preset) => (
-                  <Button
-                    key={preset.value}
-                    variant={selectedDateRange === preset.value ? 'default' : 'outline'}
-                    size="sm"
-                    onClick={() => setSelectedDateRange(preset.value)}
-                  >
-                    {preset.label}
-                  </Button>
-                ))}
-                <Button
-                  variant={selectedDateRange === 'custom' ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => setSelectedDateRange('custom')}
-                >
-                  <CalendarIcon className="h-4 w-4 mr-2" />
-                  Custom Range
-                </Button>
-              </div>
-
-              {selectedDateRange === 'custom' && (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div>
-                    <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
-                      Start Date
-                    </label>
-                    <Input
-                      type="date"
-                      value={startDate}
-                      onChange={(e) => setStartDate(e.target.value)}
-                      className="h-9"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
-                      End Date
-                    </label>
-                    <Input
-                      type="date"
-                      value={endDate}
-                      onChange={(e) => setEndDate(e.target.value)}
-                      className="h-9"
-                    />
-                  </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                    Start Date
+                  </label>
+                  <Input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="h-9"
+                  />
                 </div>
-              )}
+                <div>
+                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                    End Date
+                  </label>
+                  <Input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="h-9"
+                  />
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>

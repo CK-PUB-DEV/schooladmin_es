@@ -6,14 +6,9 @@ import { Button } from '../../../../../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../../../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../../../../components/ui/tabs';
 import { Input } from '../../../../../components/ui/input';
-import { RefreshCcw, Download, Calendar as CalendarIcon } from 'lucide-react';
+import { RefreshCcw, Download } from 'lucide-react';
 import { DailyCashStats } from './components/daily-cash-stats';
 import { DailyCashTable } from './components/daily-cash-table';
-
-const DATE_PRESETS = [
-  { label: 'Today', value: 'today', offset: 0 },
-  { label: 'Yesterday', value: 'yesterday', offset: 1 },
-];
 
 const formatDateInput = (date) => {
   const year = date.getFullYear();
@@ -29,14 +24,12 @@ export default function DailyCashProgress() {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [listLoading, setListLoading] = useState(false);
 
-  const [selectedDatePreset, setSelectedDatePreset] = useState('today');
   const [selectedDate, setSelectedDate] = useState(formatDateInput(new Date()));
   const [selectedPaymentType, setSelectedPaymentType] = useState('all');
 
   const summaryAbortRef = useRef(null);
   const listAbortRef = useRef(null);
   const debounceRef = useRef(null);
-  const dateInputRef = useRef(null);
 
   const selectedSchool = JSON.parse(localStorage.getItem('selectedSchool') || 'null');
   const token = localStorage.getItem('token');
@@ -62,17 +55,6 @@ export default function DailyCashProgress() {
     }
     fetchPaymentTypes();
   }, []);
-
-  useEffect(() => {
-    if (selectedDatePreset === 'custom') return;
-
-    const preset = DATE_PRESETS.find((item) => item.value === selectedDatePreset);
-    if (preset) {
-      const date = new Date();
-      date.setDate(date.getDate() - preset.offset);
-      setSelectedDate(formatDateInput(date));
-    }
-  }, [selectedDatePreset]);
 
   useEffect(() => {
     if (!selectedDate) return;
@@ -323,12 +305,8 @@ export default function DailyCashProgress() {
                 </label>
                 <Input
                   type="date"
-                  ref={dateInputRef}
                   value={selectedDate}
-                  onChange={(e) => {
-                    setSelectedDatePreset('custom');
-                    setSelectedDate(e.target.value);
-                  }}
+                  onChange={(e) => setSelectedDate(e.target.value)}
                   className="h-9"
                 />
               </div>
@@ -339,35 +317,6 @@ export default function DailyCashProgress() {
               </Button>
             </div>
 
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm font-medium text-muted-foreground">Quick Date:</span>
-              {DATE_PRESETS.map((preset) => (
-                <Button
-                  key={preset.value}
-                  variant={selectedDatePreset === preset.value ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => setSelectedDatePreset(preset.value)}
-                >
-                  {preset.label}
-                </Button>
-              ))}
-              <Button
-                variant={selectedDatePreset === 'custom' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => {
-                  setSelectedDatePreset('custom');
-                  const input = dateInputRef.current;
-                  if (input?.showPicker) {
-                    input.showPicker();
-                  } else {
-                    input?.focus();
-                  }
-                }}
-              >
-                <CalendarIcon className="h-4 w-4 mr-2" />
-                Pick date
-              </Button>
-            </div>
           </div>
         </CardContent>
       </Card>

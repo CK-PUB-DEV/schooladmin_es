@@ -8,15 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../../../../compone
 import { Input } from '../../../../../components/ui/input';
 import { CashierStats } from './components/cashier-stats';
 import { TransactionTable } from './components/transaction-table';
-import { RefreshCcw, Download, Calendar as CalendarIcon } from 'lucide-react';
-
-const DATE_RANGE_PRESETS = [
-  { label: 'Today', value: 'today', days: 0 },
-  { label: 'Last 7 Days', value: '7days', days: 7 },
-  { label: 'Last 30 Days', value: '30days', days: 30 },
-  { label: 'Last 60 Days', value: '60days', days: 60 },
-  { label: 'Last 90 Days', value: '90days', days: 90 },
-];
+import { RefreshCcw, Download } from 'lucide-react';
 
 const formatDateInput = (date) => {
   const year = date.getFullYear();
@@ -34,9 +26,8 @@ export default function CashierTransactions() {
 
   const [selectedSy, setSelectedSy] = useState('');
   const [selectedSem, setSelectedSem] = useState('');
-  const [selectedDateRange, setSelectedDateRange] = useState('30days');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  const [startDate, setStartDate] = useState(formatDateInput(new Date()));
+  const [endDate, setEndDate] = useState(formatDateInput(new Date()));
   const [selectedPaymentType, setSelectedPaymentType] = useState('all');
   const [selectedTerminal, setSelectedTerminal] = useState('all');
   const [selectedStatus, setSelectedStatus] = useState('all');
@@ -59,27 +50,6 @@ export default function CashierTransactions() {
   // Check if school uses finance_v1 to determine API routing
   const isFinanceV1 = selectedSchool?.finance_v1 == 1;
   const API_BASE = isFinanceV1 ? '/api/admin/finance-v1' : '/api/admin';
-
-  // Calculate date range based on preset
-  useEffect(() => {
-    if (selectedDateRange === 'custom') return;
-
-    const preset = DATE_RANGE_PRESETS.find(p => p.value === selectedDateRange);
-    if (preset) {
-      const end = new Date();
-      const start = new Date();
-
-      if (preset.days === 0) {
-        // Today
-        start.setHours(0, 0, 0, 0);
-      } else {
-        start.setDate(end.getDate() - preset.days);
-      }
-
-      setStartDate(formatDateInput(start));
-      setEndDate(formatDateInput(end));
-    }
-  }, [selectedDateRange]);
 
   // Fetch data on component mount
   useEffect(() => {
@@ -431,50 +401,26 @@ export default function CashierTransactions() {
               </Button>
             </div>
 
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm font-medium text-muted-foreground">Quick Filter:</span>
-              {DATE_RANGE_PRESETS.map((preset) => (
-                <Button
-                  key={preset.value}
-                  variant={selectedDateRange === preset.value ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => setSelectedDateRange(preset.value)}
-                >
-                  {preset.label}
-                </Button>
-              ))}
-              <Button
-                variant={selectedDateRange === 'custom' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setSelectedDateRange('custom')}
-              >
-                <CalendarIcon className="h-4 w-4 mr-2" />
-                Custom Range
-              </Button>
-            </div>
-
-            {selectedDateRange === 'custom' && (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">Start Date</label>
-                  <Input
-                    type="date"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                    className="h-9"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">End Date</label>
-                  <Input
-                    type="date"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                    className="h-9"
-                  />
-                </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="text-xs font-medium mb-1.5 block text-muted-foreground">Start Date</label>
+                <Input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="h-9"
+                />
               </div>
-            )}
+              <div>
+                <label className="text-xs font-medium mb-1.5 block text-muted-foreground">End Date</label>
+                <Input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="h-9"
+                />
+              </div>
+            </div>
           </div>
         </CardContent>
       </Card>

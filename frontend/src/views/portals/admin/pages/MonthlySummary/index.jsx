@@ -6,7 +6,7 @@ import { Button } from '../../../../../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../../../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../../../../components/ui/tabs';
 import { Input } from '../../../../../components/ui/input';
-import { RefreshCcw, Download, Calendar as CalendarIcon } from 'lucide-react';
+import { RefreshCcw, Download } from 'lucide-react';
 import { MonthlySummaryStats } from './components/monthly-summary-stats';
 import { MonthlySummaryTable } from './components/monthly-summary-table';
 
@@ -23,11 +23,6 @@ const formatDateInput = (date) => {
   return `${year}-${month}-${day}`;
 };
 
-const MONTH_PRESETS = [
-  { label: 'This Month', value: 'current', offset: 0 },
-  { label: 'Last Month', value: 'previous', offset: 1 },
-];
-
 export default function MonthlySummary() {
   const [summaryData, setSummaryData] = useState(null);
   const [items, setItems] = useState([]);
@@ -40,12 +35,10 @@ export default function MonthlySummary() {
   const [endDate, setEndDate] = useState('');
   const [selectedPaymentType, setSelectedPaymentType] = useState('all');
   const [selectedStatus, setSelectedStatus] = useState('all');
-  const [selectedPreset, setSelectedPreset] = useState('current');
 
   const summaryAbortRef = useRef(null);
   const listAbortRef = useRef(null);
   const debounceRef = useRef(null);
-  const monthInputRef = useRef(null);
 
   const selectedSchool = JSON.parse(localStorage.getItem('selectedSchool') || 'null');
   const token = localStorage.getItem('token');
@@ -224,13 +217,6 @@ export default function MonthlySummary() {
     }
   };
 
-  const handlePreset = (preset) => {
-    setSelectedPreset(preset.value);
-    const date = new Date();
-    date.setMonth(date.getMonth() - preset.offset);
-    setSelectedMonth(formatMonthInput(date));
-  };
-
   const handleRefresh = () => {
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
@@ -305,12 +291,8 @@ export default function MonthlySummary() {
                 </label>
                 <Input
                   type="month"
-                  ref={monthInputRef}
                   value={selectedMonth}
-                  onChange={(e) => {
-                    setSelectedPreset('custom');
-                    setSelectedMonth(e.target.value);
-                  }}
+                  onChange={(e) => setSelectedMonth(e.target.value)}
                   className="h-9"
                 />
               </div>
@@ -351,36 +333,6 @@ export default function MonthlySummary() {
               <Button variant="outline" size="sm" onClick={handleExport} className="h-9">
                 <Download className="h-4 w-4 mr-2" />
                 Export
-              </Button>
-            </div>
-
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm font-medium text-muted-foreground">Quick Month:</span>
-              {MONTH_PRESETS.map((preset) => (
-                <Button
-                  key={preset.value}
-                  variant={selectedPreset === preset.value ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => handlePreset(preset)}
-                >
-                  {preset.label}
-                </Button>
-              ))}
-              <Button
-                variant={selectedPreset === 'custom' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => {
-                  setSelectedPreset('custom');
-                  const input = monthInputRef.current;
-                  if (input?.showPicker) {
-                    input.showPicker();
-                  } else {
-                    input?.focus();
-                  }
-                }}
-              >
-                <CalendarIcon className="h-4 w-4 mr-2" />
-                Pick month
               </Button>
             </div>
           </div>
