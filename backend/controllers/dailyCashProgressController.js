@@ -1,4 +1,9 @@
 import mysql from 'mysql2/promise';
+import {
+  buildCollectionAggregations,
+  buildDailyCashSummary as buildFinanceV2DailyCashSummary,
+  fetchProcessedCollectionItems,
+} from './financeV2ReportUtils.js';
 
 const getSchoolConnection = async (schoolDbConfig) => {
   const parsedPort = Number.parseInt(schoolDbConfig.db_port, 10);
@@ -278,15 +283,14 @@ export const getDailyCashSummary = async (req, res) => {
     const { resolvedStart, resolvedEnd } = resolveDateRange({ date, startDate, endDate });
     const db = await getSchoolConnection(schoolDbConfig);
 
-    const rows = await fetchPaymentRows(db, {
+    const processed = await fetchProcessedCollectionItems(db, {
+      date: resolvedStart === resolvedEnd ? resolvedStart : null,
       startDate: resolvedStart,
       endDate: resolvedEnd,
       paymentTypeId,
     });
-
-    const processed = buildProcessedPayments(rows);
-    const summary = buildSummary(processed);
-    const aggregations = buildAggregations(processed);
+    const summary = buildFinanceV2DailyCashSummary(processed);
+    const aggregations = buildCollectionAggregations(processed);
 
     await db.end();
 
@@ -294,7 +298,9 @@ export const getDailyCashSummary = async (req, res) => {
       status: 'success',
       data: {
         summary,
-        ...aggregations,
+        byDay: aggregations.byDay,
+        byClassification: aggregations.byClassification,
+        byPaymentType: aggregations.byPaymentType,
       },
     });
   } catch (error) {
@@ -321,13 +327,12 @@ export const getDailyCashItems = async (req, res) => {
     const { resolvedStart, resolvedEnd } = resolveDateRange({ date, startDate, endDate });
     const db = await getSchoolConnection(schoolDbConfig);
 
-    const rows = await fetchPaymentRows(db, {
+    const processed = await fetchProcessedCollectionItems(db, {
+      date: resolvedStart === resolvedEnd ? resolvedStart : null,
       startDate: resolvedStart,
       endDate: resolvedEnd,
       paymentTypeId,
     });
-
-    const processed = buildProcessedPayments(rows);
 
     await db.end();
 

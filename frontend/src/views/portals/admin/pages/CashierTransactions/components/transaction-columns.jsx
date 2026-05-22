@@ -22,6 +22,7 @@ const formatDateTime = (dateString) => {
 };
 
 const getOverpayment = (row) => {
+  if (row.overpayment_amount !== undefined) return Number(row.overpayment_amount) || 0;
   if (Number(row.cancelled) === 1) return 0;
   const totalAmount = Number(row.totalamount) || 0;
   const amountPaid = Number(row.amountpaid) || 0;

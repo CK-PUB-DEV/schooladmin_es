@@ -20,7 +20,7 @@ import {
 } from '../../../../../../components/ui/table';
 import { Input } from '../../../../../../components/ui/input';
 import { Button } from '../../../../../../components/ui/button';
-import { Search, ChevronDown } from 'lucide-react';
+import { Search, ChevronDown, ChevronRight } from 'lucide-react';
 import { dailyCashColumns } from './daily-cash-columns';
 import { TablePaginationBar } from '../../../../../../components/ui/data-table-view';
 

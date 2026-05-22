@@ -1,4 +1,10 @@
 import mysql from 'mysql2/promise';
+import {
+  buildCollectionSummaryData,
+  buildYearlyTableData,
+  fetchProcessedCollectionItems,
+  resolveYearEndWindow,
+} from './financeV2ReportUtils.js';
 
 const getSchoolConnection = async (schoolDbConfig) => {
   const parsedPort = Number.parseInt(schoolDbConfig.db_port, 10);
@@ -102,64 +108,19 @@ export const getMonthlySummary = async (req, res) => {
     }
 
     const db = await getSchoolConnection(schoolDbConfig);
-    const { clause, params } = buildFilters({ startDate, endDate, paymentTypeId, status });
-
-    const [summaryRows] = await db.execute(
-      `
-        SELECT
-          COUNT(DISTINCT t.transno) as transaction_count,
-          COUNT(cct.id) as line_count,
-          COUNT(DISTINCT ${normalizeItemLabel}) as item_count,
-          SUM(cct.amount) as total_amount
-        FROM chrngcashtrans cct
-        JOIN chrngtrans t ON t.transno = cct.transno
-        WHERE cct.deleted = 0${clause}
-      `,
-      params
-    );
-
-    const [byItem] = await db.execute(
-      `
-        SELECT
-          ${normalizeItemLabel} as item,
-          SUM(cct.amount) as total_amount,
-          COUNT(DISTINCT t.transno) as transaction_count
-        FROM chrngcashtrans cct
-        JOIN chrngtrans t ON t.transno = cct.transno
-        WHERE cct.deleted = 0${clause}
-        GROUP BY item
-        ORDER BY total_amount DESC
-      `,
-      params
-    );
-
-    const [byMonth] = await db.execute(
-      `
-        SELECT
-          DATE_FORMAT(t.transdate, '%Y-%m') as month_key,
-          SUM(cct.amount) as total_amount,
-          COUNT(DISTINCT t.transno) as transaction_count
-        FROM chrngcashtrans cct
-        JOIN chrngtrans t ON t.transno = cct.transno
-        WHERE cct.deleted = 0${clause}
-        GROUP BY month_key
-        ORDER BY month_key
-      `,
-      params
-    );
+    const processed = await fetchProcessedCollectionItems(db, {
+      startDate,
+      endDate,
+      paymentTypeId,
+      status,
+    });
+    const summaryData = buildCollectionSummaryData(processed);
 
     await db.end();
 
     res.status(200).json({
       status: 'success',
-      data: {
-        summary: summaryRows[0] || null,
-        byItem,
-        byMonth: byMonth.map((item) => ({
-          ...item,
-          month_label: formatMonthLabel(item.month_key),
-        })),
-      },
+      data: summaryData,
     });
   } catch (error) {
     console.error('Error fetching monthly summary:', error);
@@ -183,22 +144,13 @@ export const getMonthlySummaryItems = async (req, res) => {
     }
 
     const db = await getSchoolConnection(schoolDbConfig);
-    const { clause, params } = buildFilters({ startDate, endDate, paymentTypeId, status });
-
-    const [byItem] = await db.execute(
-      `
-        SELECT
-          ${normalizeItemLabel} as item,
-          SUM(cct.amount) as total_amount,
-          COUNT(DISTINCT t.transno) as transaction_count
-        FROM chrngcashtrans cct
-        JOIN chrngtrans t ON t.transno = cct.transno
-        WHERE cct.deleted = 0${clause}
-        GROUP BY item
-        ORDER BY total_amount DESC
-      `,
-      params
-    );
+    const processed = await fetchProcessedCollectionItems(db, {
+      startDate,
+      endDate,
+      paymentTypeId,
+      status,
+    });
+    const { byItem } = buildCollectionSummaryData(processed);
 
     await db.end();
 
@@ -250,10 +202,9 @@ export const getYearlySummary = async (req, res) => {
     }
 
     const schoolYear = syRows[0];
-    const syStart = parseDateOnly(schoolYear.sdate);
-    const syEnd = parseDateOnly(schoolYear.edate);
+    const window = await resolveYearEndWindow(db, syid, schoolYear);
 
-    if (!syStart || !syEnd) {
+    if (!window) {
       await db.end();
       return res.status(400).json({
         status: 'error',
@@ -261,60 +212,14 @@ export const getYearlySummary = async (req, res) => {
       });
     }
 
-    const startDate = formatDateKey(syStart);
-    const endDate = formatDateKey(syEnd);
-    const { clause, params } = buildFilters({
-      startDate,
-      endDate,
+    const processed = await fetchProcessedCollectionItems(db, {
+      syid,
+      startDate: window.startDate,
+      endDate: window.endDate,
       paymentTypeId,
       status,
     });
-
-    const baseParams = [syid, ...params];
-
-    const [summaryRows] = await db.execute(
-      `
-        SELECT
-          COUNT(DISTINCT t.transno) as transaction_count,
-          COUNT(cct.id) as line_count,
-          COUNT(DISTINCT ${normalizeItemLabel}) as item_count,
-          SUM(cct.amount) as total_amount
-        FROM chrngcashtrans cct
-        JOIN chrngtrans t ON t.transno = cct.transno
-        WHERE cct.deleted = 0 AND t.syid = ?${clause}
-      `,
-      baseParams
-    );
-
-    const [byMonth] = await db.execute(
-      `
-        SELECT
-          DATE_FORMAT(t.transdate, '%Y-%m') as month_key,
-          SUM(cct.amount) as total_amount,
-          COUNT(DISTINCT t.transno) as transaction_count
-        FROM chrngcashtrans cct
-        JOIN chrngtrans t ON t.transno = cct.transno
-        WHERE cct.deleted = 0 AND t.syid = ?${clause}
-        GROUP BY month_key
-        ORDER BY month_key
-      `,
-      baseParams
-    );
-
-    const [byItem] = await db.execute(
-      `
-        SELECT
-          ${normalizeItemLabel} as item,
-          SUM(cct.amount) as total_amount,
-          COUNT(DISTINCT t.transno) as transaction_count
-        FROM chrngcashtrans cct
-        JOIN chrngtrans t ON t.transno = cct.transno
-        WHERE cct.deleted = 0 AND t.syid = ?${clause}
-        GROUP BY item
-        ORDER BY total_amount DESC
-      `,
-      baseParams
-    );
+    const summaryData = buildCollectionSummaryData(processed);
 
     await db.end();
 
@@ -324,15 +229,10 @@ export const getYearlySummary = async (req, res) => {
         schoolYear: {
           id: schoolYear.id,
           sydesc: schoolYear.sydesc,
-          startDate,
-          endDate,
+          startDate: window.startDate,
+          endDate: window.endDate,
         },
-        summary: summaryRows[0] || null,
-        byMonth: byMonth.map((item) => ({
-          ...item,
-          month_label: formatMonthLabel(item.month_key),
-        })),
-        byItem,
+        ...summaryData,
       },
     });
   } catch (error) {
@@ -379,10 +279,9 @@ export const getYearlySummaryTable = async (req, res) => {
     }
 
     const schoolYear = syRows[0];
-    const syStart = parseDateOnly(schoolYear.sdate);
-    const syEnd = parseDateOnly(schoolYear.edate);
+    const window = await resolveYearEndWindow(db, syid, schoolYear);
 
-    if (!syStart || !syEnd) {
+    if (!window) {
       await db.end();
       return res.status(400).json({
         status: 'error',
@@ -390,57 +289,16 @@ export const getYearlySummaryTable = async (req, res) => {
       });
     }
 
-    const startDate = formatDateKey(syStart);
-    const endDate = formatDateKey(syEnd);
-    const months = buildMonthRange(syStart, syEnd);
-    const { clause, params } = buildFilters({
-      startDate,
-      endDate,
+    const processed = await fetchProcessedCollectionItems(db, {
+      syid,
+      startDate: window.startDate,
+      endDate: window.endDate,
       paymentTypeId,
       status,
     });
-
-    const baseParams = [syid, ...params];
-
-    const [rows] = await db.execute(
-      `
-        SELECT
-          ${normalizeItemLabel} as item,
-          DATE_FORMAT(t.transdate, '%Y-%m') as month_key,
-          SUM(cct.amount) as total_amount
-        FROM chrngcashtrans cct
-        JOIN chrngtrans t ON t.transno = cct.transno
-        WHERE cct.deleted = 0 AND t.syid = ?${clause}
-        GROUP BY item, month_key
-        ORDER BY item, month_key
-      `,
-      baseParams
-    );
+    const tableData = buildYearlyTableData(processed.processedItems, window.months);
 
     await db.end();
-
-    const itemMap = new Map();
-
-    rows.forEach((row) => {
-      const itemName = row.item || 'Unspecified';
-      if (!itemMap.has(itemName)) {
-        itemMap.set(itemName, {
-          item: itemName,
-          total_amount: 0,
-          monthly: {},
-        });
-      }
-
-      const entry = itemMap.get(itemName);
-      const amount = Number(row.total_amount) || 0;
-      entry.monthly[row.month_key] = amount;
-      entry.total_amount += amount;
-    });
-
-    const items = Array.from(itemMap.values()).map((entry) => ({
-      ...entry,
-      total_amount: Number(entry.total_amount.toFixed(2)),
-    }));
 
     res.status(200).json({
       status: 'success',
@@ -448,11 +306,10 @@ export const getYearlySummaryTable = async (req, res) => {
         schoolYear: {
           id: schoolYear.id,
           sydesc: schoolYear.sydesc,
-          startDate,
-          endDate,
+          startDate: window.startDate,
+          endDate: window.endDate,
         },
-        months,
-        items,
+        ...tableData,
       },
     });
   } catch (error) {

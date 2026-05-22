@@ -400,7 +400,7 @@ const fetchTuitionFees = async (db, student, syid, semid, schoolInfo) => {
 
 const applyDiscounts = async (db, student, syid, semid, totalsByClass) => {
   if (!syid || Object.keys(totalsByClass).length === 0) {
-    return totalsByClass;
+    return { totals: totalsByClass, discount: 0 };
   }
 
   const params = [student.id, syid];
@@ -419,15 +419,17 @@ const applyDiscounts = async (db, student, syid, semid, totalsByClass) => {
   const [rows] = await db.execute(query, params);
 
   const updated = { ...totalsByClass };
+  let totalAppliedDiscount = 0;
   rows.forEach((row) => {
     const classid = row.classid;
     const discount = toNumber(row.amount);
     if (!updated[classid]) return;
     const applied = Math.min(updated[classid], discount);
     updated[classid] = Math.max(updated[classid] - applied, 0);
+    totalAppliedDiscount += applied;
   });
 
-  return updated;
+  return { totals: updated, discount: totalAppliedDiscount };
 };
 
 const fetchBookEntries = async (db, student, syid, semid) => {
@@ -498,7 +500,7 @@ const fetchStudentPayments = async (db, student, syid, semid, balClassId) => {
 
   const paymentParams = [student.id, syid];
   let paymentQuery = `
-    SELECT SUM(amountpaid) as amount
+    SELECT SUM(IFNULL(amountpaid, 0) - IFNULL(change_amount, 0)) as amount
     FROM chrngtrans
     WHERE studid = ? AND syid = ? AND cancelled = 0
   `;
@@ -557,6 +559,8 @@ const calculateStudentTotals = async (db, student, syid, semid, schoolInfo, balC
   if (!syid) {
     return {
       total_fees: 0,
+      total_discount: 0,
+      total_assessment: 0,
       total_paid: 0,
       balance: 0,
       overpayment: 0,
@@ -600,7 +604,12 @@ const calculateStudentTotals = async (db, student, syid, semid, schoolInfo, balC
     totalsByClass[row.classid] = (totalsByClass[row.classid] || 0) + amount;
   });
 
-  const discountedTotals = await applyDiscounts(db, student, syid, semid, totalsByClass);
+  const discountData = await applyDiscounts(db, student, syid, semid, totalsByClass);
+  const discountedTotals = discountData.totals;
+  const grossTuitionTotal = Object.values(totalsByClass).reduce(
+    (sum, value) => sum + toNumber(value),
+    0
+  );
   const tuitionTotal = Object.values(discountedTotals).reduce(
     (sum, value) => sum + toNumber(value),
     0
@@ -617,6 +626,8 @@ const calculateStudentTotals = async (db, student, syid, semid, schoolInfo, balC
   const overpayment = Math.max(totalPaid - totalFees, 0);
 
   return {
+    total_assessment: Number((grossTuitionTotal + adjustmentCharges + bookEntries + oldAccounts).toFixed(2)),
+    total_discount: Number(discountData.discount.toFixed(2)),
     total_fees: Number(totalFees.toFixed(2)),
     total_paid: Number(totalPaid.toFixed(2)),
     balance: Number(balance.toFixed(2)),
@@ -626,6 +637,9 @@ const calculateStudentTotals = async (db, student, syid, semid, schoolInfo, balC
 
 const buildSummary = (studentsWithTotals) => {
   const summary = {
+    total_assessment: 0,
+    total_discount: 0,
+    total_payment: 0,
     total_receivable: 0,
     total_students: studentsWithTotals.length,
     students_with_balance: 0,
@@ -646,6 +660,9 @@ const buildSummary = (studentsWithTotals) => {
   studentsWithTotals.forEach((student) => {
     const balance = toNumber(student.balance);
     const overpayment = toNumber(student.overpayment);
+    summary.total_assessment += toNumber(student.total_assessment || student.total_fees);
+    summary.total_discount += toNumber(student.total_discount);
+    summary.total_payment += toNumber(student.total_paid);
 
     if (balance > 0) {
       summary.total_receivable += balance;
@@ -692,6 +709,9 @@ const buildSummary = (studentsWithTotals) => {
       : 0;
   summary.total_receivable = Number(summary.total_receivable.toFixed(2));
   summary.total_overpayment = Number(summary.total_overpayment.toFixed(2));
+  summary.total_assessment = Number(summary.total_assessment.toFixed(2));
+  summary.total_discount = Number(summary.total_discount.toFixed(2));
+  summary.total_payment = Number(summary.total_payment.toFixed(2));
 
   const programData = Array.from(byProgram.values()).map((entry) => ({
     ...entry,
@@ -1028,6 +1048,9 @@ export const getAccountReceivableSummary = async (req, res) => {
         status: 'success',
         data: {
           summary: {
+            total_assessment: 0,
+            total_discount: 0,
+            total_payment: 0,
             total_receivable: 0,
             total_students: 0,
             students_with_balance: 0,
@@ -1102,6 +1125,9 @@ export const getAccountReceivableSummaryTotals = async ({
   if (!syid) {
     return {
       summary: {
+        total_assessment: 0,
+        total_discount: 0,
+        total_payment: 0,
         total_receivable: 0,
         total_students: 0,
         students_with_balance: 0,
@@ -1131,6 +1157,9 @@ export const getAccountReceivableSummaryTotals = async ({
     if (!students.length) {
       return {
         summary: {
+          total_assessment: 0,
+          total_discount: 0,
+          total_payment: 0,
           total_receivable: 0,
           total_students: 0,
           students_with_balance: 0,

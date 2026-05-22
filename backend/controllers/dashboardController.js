@@ -2,6 +2,7 @@ import mysql from 'mysql2/promise';
 import db from '../config/db.js';
 import { getAccountReceivableSummaryTotals } from './accountReceivablesController.js';
 import { getFinanceV1ReceivableSummaryTotals } from './financeV1Controller.js';
+import { fetchCollectionTransactions, normalizeDateKey, round2 } from './financeV2ReportUtils.js';
 
 /**
  * Get school database connection
@@ -20,6 +21,40 @@ const getSchoolConnection = async (schoolDbConfig) => {
   });
   return connection;
 };
+
+const formatDateInput = (date) => {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const formatMonthKey = (date) =>
+  `${date.getFullYear()}-${`${date.getMonth() + 1}`.padStart(2, '0')}`;
+
+const monthStartOf = (date) => new Date(date.getFullYear(), date.getMonth(), 1);
+
+const buildRecentMonthKeys = (count = 12) => {
+  const now = new Date();
+  const months = [];
+  for (let index = count - 1; index >= 0; index -= 1) {
+    const current = new Date(now.getFullYear(), now.getMonth() - index, 1);
+    months.push({
+      key: formatMonthKey(current),
+      label: current.toLocaleString('en-US', { month: 'short' }),
+    });
+  }
+  return months;
+};
+
+const sumNetCollections = (transactions, predicate = () => true) =>
+  round2(
+    (transactions || []).reduce(
+      (sum, transaction) =>
+        predicate(transaction) ? sum + Number(transaction.net_amount || 0) : sum,
+      0
+    )
+  );
 
 /**
  * Check if finance_v1 is enabled for this school
@@ -73,99 +108,94 @@ export const getDashboardData = async (req, res) => {
     const activeSemId = activeSemester[0]?.id || 0;
 
     // === ENROLLMENT DATA ===
-    // Total enrolled students across all programs
-    const [gsCount] = await schoolDb.execute(
-      `SELECT COUNT(*) as count FROM enrolledstud WHERE deleted = 0 AND syid = ? AND studstatus IN (1, 2)`,
-      [activeSyId]
-    );
-    const [shsCount] = await schoolDb.execute(
-      `SELECT COUNT(*) as count FROM sh_enrolledstud WHERE deleted = 0 AND syid = ? AND semid = ? AND studstatus IN (1, 2)`,
-      [activeSyId, activeSemId]
-    );
-    const [collegeCount] = await schoolDb.execute(
-      `SELECT COUNT(*) as count FROM college_enrolledstud WHERE deleted = 0 AND syid = ? AND semid = ? AND studstatus IN (1, 2)`,
-      [activeSyId, activeSemId]
-    );
-
-    const totalEnrolled = Number(gsCount[0]?.count || 0) + Number(shsCount[0]?.count || 0) + Number(collegeCount[0]?.count || 0);
-
-    // Gender distribution
-    const [genderDist] = await schoolDb.execute(
-      `SELECT
-        CASE
-          WHEN UPPER(s.gender) IN ('M', 'MALE') THEN 'Male'
-          WHEN UPPER(s.gender) IN ('F', 'FEMALE') THEN 'Female'
-          ELSE 'Other'
-        END as gender,
-        COUNT(*) as count
-      FROM (
-        SELECT s.gender FROM enrolledstud e
-        JOIN studinfo s ON e.studid = s.id
-        WHERE e.deleted = 0 AND e.syid = ? AND e.studstatus IN (1, 2)
-        UNION ALL
-        SELECT s.gender FROM sh_enrolledstud e
-        JOIN studinfo s ON e.studid = s.id
-        WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ? AND e.studstatus IN (1, 2)
-        UNION ALL
-        SELECT s.gender FROM college_enrolledstud e
-        JOIN studinfo s ON e.studid = s.id
-        WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ? AND e.studstatus IN (1, 2)
-      ) AS combined
-      JOIN studinfo s ON 1=0
-      GROUP BY gender
-      HAVING gender IN ('Male', 'Female')`,
-      [activeSyId, activeSyId, activeSemId, activeSyId, activeSemId]
+    const enrollmentStatusFilter = [1, 2, 4];
+    const [enrollmentRows] = await schoolDb.execute(
+      `
+        SELECT
+          combined.studid,
+          combined.levelid,
+          gl.levelname,
+          gl.sortid,
+          gl.acadprogid,
+          si.gender
+        FROM (
+          SELECT e.studid, e.levelid
+          FROM enrolledstud e
+          WHERE e.deleted = 0 AND e.syid = ? AND e.studstatus IN (${enrollmentStatusFilter.map(() => '?').join(',')})
+          UNION ALL
+          SELECT e.studid, e.levelid
+          FROM sh_enrolledstud e
+          WHERE e.deleted = 0 AND e.syid = ? AND e.studstatus IN (${enrollmentStatusFilter.map(() => '?').join(',')})
+          UNION ALL
+          SELECT e.studid, e.yearLevel as levelid
+          FROM college_enrolledstud e
+          WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ? AND e.studstatus IN (${enrollmentStatusFilter.map(() => '?').join(',')})
+        ) combined
+        JOIN studinfo si ON si.id = combined.studid AND si.deleted = 0 AND si.studisactive = 1
+        LEFT JOIN gradelevel gl ON gl.id = combined.levelid
+      `,
+      [
+        activeSyId,
+        ...enrollmentStatusFilter,
+        activeSyId,
+        ...enrollmentStatusFilter,
+        activeSyId,
+        activeSemId,
+        ...enrollmentStatusFilter,
+      ]
     );
 
-    // Fix gender query - direct approach
-    const [genderData] = await schoolDb.execute(
-      `SELECT
-        SUM(CASE WHEN UPPER(gender) IN ('M', 'MALE') THEN 1 ELSE 0 END) as male,
-        SUM(CASE WHEN UPPER(gender) IN ('F', 'FEMALE') THEN 1 ELSE 0 END) as female
-      FROM (
-        SELECT s.gender FROM enrolledstud e
-        JOIN studinfo s ON e.studid = s.id
-        WHERE e.deleted = 0 AND e.syid = ? AND e.studstatus IN (1, 2)
-        UNION ALL
-        SELECT s.gender FROM sh_enrolledstud e
-        JOIN studinfo s ON e.studid = s.id
-        WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ? AND e.studstatus IN (1, 2)
-        UNION ALL
-        SELECT s.gender FROM college_enrolledstud e
-        JOIN studinfo s ON e.studid = s.id
-        WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ? AND e.studstatus IN (1, 2)
-      ) AS combined`,
-      [activeSyId, activeSyId, activeSemId, activeSyId, activeSemId]
+    const seenStudentIds = new Set();
+    const dedupedEnrollmentRows = [];
+    enrollmentRows.forEach((row) => {
+      if (seenStudentIds.has(row.studid)) return;
+      seenStudentIds.add(row.studid);
+      dedupedEnrollmentRows.push(row);
+    });
+
+    const totalEnrolled = dedupedEnrollmentRows.length;
+    const genderCounts = dedupedEnrollmentRows.reduce(
+      (acc, row) => {
+        const gender = String(row.gender || '').toUpperCase();
+        if (gender === 'M' || gender === 'MALE') acc.male += 1;
+        if (gender === 'F' || gender === 'FEMALE') acc.female += 1;
+        return acc;
+      },
+      { male: 0, female: 0 }
     );
 
     const studentGender = [
-      { label: 'Male', value: Number(genderData[0]?.male || 0) },
-      { label: 'Female', value: Number(genderData[0]?.female || 0) },
+      { label: 'Male', value: genderCounts.male },
+      { label: 'Female', value: genderCounts.female },
     ];
 
-    // Grade level distribution
-    const [gradeLevels] = await schoolDb.execute(
-      `SELECT
-        COALESCE(l.levelname, 'Unknown') as label,
-        COUNT(*) as value
-      FROM enrolledstud e
-      LEFT JOIN gradelevel l ON e.levelid = l.id
-      WHERE e.deleted = 0 AND e.syid = ? AND e.studstatus IN (1, 2)
-      GROUP BY e.levelid, l.levelname, l.sortid
-      ORDER BY l.sortid`,
-      [activeSyId]
-    );
+    const gradeLevelMap = new Map();
+    dedupedEnrollmentRows.forEach((row) => {
+      const key = row.levelid || 'unknown';
+      if (!gradeLevelMap.has(key)) {
+        gradeLevelMap.set(key, {
+          label: row.levelname || 'Unknown',
+          value: 0,
+          sortid: Number(row.sortid) || 999,
+        });
+      }
+      gradeLevelMap.get(key).value += 1;
+    });
+
+    const gradeLevels = Array.from(gradeLevelMap.values())
+      .sort((a, b) => a.sortid - b.sortid || a.label.localeCompare(b.label))
+      .map(({ label, value }) => ({ label, value }));
 
     // Pending enrollments
     const [pendingEnrollments] = await schoolDb.execute(
       `SELECT COUNT(*) as count FROM (
         SELECT id FROM enrolledstud WHERE deleted = 0 AND syid = ? AND studstatus = 0
         UNION ALL
-        SELECT id FROM sh_enrolledstud WHERE deleted = 0 AND syid = ? AND semid = ? AND studstatus = 0
+        SELECT id FROM sh_enrolledstud WHERE deleted = 0 AND syid = ? AND studstatus = 0
         UNION ALL
         SELECT id FROM college_enrolledstud WHERE deleted = 0 AND syid = ? AND semid = ? AND studstatus = 0
       ) AS pending`,
-      [activeSyId, activeSyId, activeSemId, activeSyId, activeSemId]
+      [activeSyId, activeSyId, activeSyId, activeSemId]
     );
 
     // === EMPLOYEE DATA ===
@@ -188,8 +218,11 @@ export const getDashboardData = async (req, res) => {
     );
 
     // === FINANCE DATA ===
-    const today = new Date().toISOString().split('T')[0];
-    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+    const todayDate = new Date();
+    const today = formatDateInput(todayDate);
+    const monthStart = formatDateInput(monthStartOf(todayDate));
+    const recentMonths = buildRecentMonthKeys(12);
+    const twelveMonthStart = `${recentMonths[0]?.key || formatMonthKey(todayDate)}-01`;
 
     let collectionsToday = 0;
     let collectionsMTD = 0;
@@ -198,16 +231,10 @@ export const getDashboardData = async (req, res) => {
     let monthlyCollections = [];
 
     if (useFinanceV1) {
-      // ===========================================
-      // FINANCE V1 LOGIC
-      // Collections: from chrngtrans table (no semid filter, no paymenttype_id)
-      // Receivables: from studledger table (amount - discount - payments)
-      // ===========================================
-
-      // Collections today from chrngtrans (Finance V1 uses chrngtrans for transactions)
+      // Finance V1 uses older transaction rows and ledger-based receivables.
       try {
         const [todayCollections] = await schoolDb.execute(
-          `SELECT COALESCE(SUM(totalamount), 0) as total FROM chrngtrans
+          `SELECT COALESCE(SUM(IFNULL(amountpaid, 0)), 0) as total FROM chrngtrans
            WHERE cancelled = 0 AND DATE(transdate) = ? AND syid = ?`,
           [today, activeSyId]
         );
@@ -216,10 +243,9 @@ export const getDashboardData = async (req, res) => {
         collectionsToday = 0;
       }
 
-      // Collections MTD from chrngtrans
       try {
         const [mtdCollections] = await schoolDb.execute(
-          `SELECT COALESCE(SUM(totalamount), 0) as total FROM chrngtrans
+          `SELECT COALESCE(SUM(IFNULL(amountpaid, 0)), 0) as total FROM chrngtrans
            WHERE cancelled = 0 AND DATE(transdate) >= ? AND DATE(transdate) <= ? AND syid = ?`,
           [monthStart, today, activeSyId]
         );
@@ -245,79 +271,54 @@ export const getDashboardData = async (req, res) => {
         receivablesFallback = 0;
       }
 
-      // Monthly collections for last 12 months from chrngtrans
       try {
         const [monthlyData] = await schoolDb.execute(
           `SELECT
             DATE_FORMAT(transdate, '%Y-%m') as month,
-            COALESCE(SUM(totalamount), 0) as total
+            COALESCE(SUM(IFNULL(amountpaid, 0)), 0) as total
           FROM chrngtrans
-          WHERE cancelled = 0 AND transdate >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH)
+          WHERE cancelled = 0 AND DATE(transdate) >= ?
           GROUP BY DATE_FORMAT(transdate, '%Y-%m')
-          ORDER BY month`
+          ORDER BY month`,
+          [twelveMonthStart]
         );
         monthlyCollections = monthlyData;
       } catch {
         monthlyCollections = [];
       }
     } else {
-      // ===========================================
-      // FINANCE V2 LOGIC
-      // Collections: from chrngtrans table (with semid filter)
-      // Receivables: from enrolledstud.balance field
-      // ===========================================
-
-      // Collections today from chrngtrans
       try {
-        const [todayCollections] = await schoolDb.execute(
-          `SELECT COALESCE(SUM(totalamount), 0) as total FROM chrngtrans
-           WHERE cancelled = 0 AND DATE(transdate) = ? AND syid = ? AND semid = ?`,
-          [today, activeSyId, activeSemId]
+        const transactions = await fetchCollectionTransactions(schoolDb, {
+          syid: activeSyId,
+          startDate: twelveMonthStart,
+          endDate: today,
+        });
+        collectionsToday = sumNetCollections(
+          transactions,
+          (transaction) => normalizeDateKey(transaction.trans_day || transaction.transdate) === today
         );
-        collectionsToday = Number(todayCollections[0]?.total || 0);
+        collectionsMTD = sumNetCollections(
+          transactions,
+          (transaction) => normalizeDateKey(transaction.trans_day || transaction.transdate) >= monthStart
+        );
+
+        const monthlyMap = new Map();
+        transactions.forEach((transaction) => {
+          const month = normalizeDateKey(transaction.transdate || transaction.trans_day).slice(0, 7);
+          if (!month) return;
+          monthlyMap.set(month, Number(monthlyMap.get(month) || 0) + Number(transaction.net_amount || 0));
+        });
+        monthlyCollections = Array.from(monthlyMap.entries()).map(([month, total]) => ({
+          month,
+          total: round2(total),
+        }));
       } catch {
         collectionsToday = 0;
-      }
-
-      // Collections MTD from chrngtrans
-      try {
-        const [mtdCollections] = await schoolDb.execute(
-          `SELECT COALESCE(SUM(totalamount), 0) as total FROM chrngtrans
-           WHERE cancelled = 0 AND DATE(transdate) >= ? AND DATE(transdate) <= ? AND syid = ? AND semid = ?`,
-          [monthStart, today, activeSyId, activeSemId]
-        );
-        collectionsMTD = Number(mtdCollections[0]?.total || 0);
-      } catch {
         collectionsMTD = 0;
-      }
-
-      // Receivables from enrolledstud.balance (Finance V2 approach)
-      try {
-        const [receivablesData] = await schoolDb.execute(
-          `SELECT COALESCE(SUM(balance), 0) as balance FROM enrolledstud
-           WHERE deleted = 0 AND syid = ? AND balance > 0`,
-          [activeSyId]
-        );
-        receivablesFallback = Number(receivablesData[0]?.balance || 0);
-      } catch {
-        receivablesFallback = 0;
-      }
-
-      // Monthly collections for last 12 months from chrngtrans
-      try {
-        const [monthlyData] = await schoolDb.execute(
-          `SELECT
-            DATE_FORMAT(transdate, '%Y-%m') as month,
-            COALESCE(SUM(totalamount), 0) as total
-          FROM chrngtrans
-          WHERE cancelled = 0 AND transdate >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH)
-          GROUP BY DATE_FORMAT(transdate, '%Y-%m')
-          ORDER BY month`
-        );
-        monthlyCollections = monthlyData;
-      } catch {
         monthlyCollections = [];
       }
+
+      receivablesFallback = 0;
     }
 
     let summaryReceivables = null;
@@ -350,13 +351,10 @@ export const getDashboardData = async (req, res) => {
     receivables = summaryReceivables !== null ? summaryReceivables : receivablesFallback;
 
     // Build 12-month collections array
-    const monthLabels = [];
+    const monthLabels = recentMonths.map((month) => month.label);
     const collectionsData = [];
-    const now = new Date();
-    for (let i = 11; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      monthLabels.push(d.toLocaleString('en-US', { month: 'short' }));
+    for (const month of recentMonths) {
+      const monthKey = month.key;
       const found = monthlyCollections.find((m) => m.month === monthKey);
       collectionsData.push(Number(found?.total || 0));
     }
