@@ -477,14 +477,16 @@ export default function AccountReceivables() {
     ? sortedLevels
     : sortedLevels.filter((l) => `${l.acadprogid}` === selectedProgram);
 
-  // Read from new V2 flat format (or V1 nested summary format)
+  // V2: flat format with total_payables key
+  // V1: nested { summary: { total_assessment, total_payment, total_receivable, ... } }
   const isV2Data         = summaryData && 'total_payables' in summaryData;
-  const totalPayables    = isV2Data ? Number(summaryData.total_payables) || 0 : Number(summaryData?.summary?.total_receivable) || 0;
-  const totalPayment     = isV2Data ? Number(summaryData.total_payment)  || 0 : Number(summaryData?.summary?.total_payment) || 0;
-  const totalBalance     = isV2Data ? Number(summaryData.total_balance)  || 0 : Number(summaryData?.summary?.total_balance  ?? summaryData?.summary?.total_receivable) || 0;
-  const totalOverpayment = isV2Data ? Number(summaryData.total_overpayment) || 0 : Number(summaryData?.summary?.total_overpayment) || 0;
-  const totalStudents    = isV2Data ? Number(summaryData.student_count)  || 0 : Number(summaryData?.summary?.total_students) || 0;
-  const withBalance      = isV2Data ? Number(summaryData.students_with_balance) || 0 : Number(summaryData?.summary?.students_with_balance) || 0;
+  const v1s              = summaryData?.summary || {};
+  const totalPayables    = isV2Data ? Number(summaryData.total_payables)    || 0 : Number(v1s.total_assessment)                    || 0;
+  const totalPayment     = isV2Data ? Number(summaryData.total_payment)     || 0 : Number(v1s.total_payment)                       || 0;
+  const totalBalance     = isV2Data ? Number(summaryData.total_balance)     || 0 : Number(v1s.total_receivable ?? v1s.total_balance)|| 0;
+  const totalOverpayment = isV2Data ? Number(summaryData.total_overpayment) || 0 : Number(v1s.total_overpayment)                   || 0;
+  const totalStudents    = isV2Data ? Number(summaryData.student_count)     || 0 : Number(v1s.total_students)                      || 0;
+  const withBalance      = isV2Data ? Number(summaryData.students_with_balance) || 0 : Number(v1s.students_with_balance)           || 0;
   const breakdown        = isV2Data ? (summaryData.breakdown || []) : [];
 
   const tabs = isFinanceV1
@@ -659,11 +661,11 @@ export default function AccountReceivables() {
         </div>
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-          <SnapshotCard label="Total Payables"    value={formatCurrency(totalPayables)}    sub={`${formatNumber(totalStudents)} students`} />
-          <SnapshotCard label="Payments"          value={formatCurrency(totalPayment)}     tone="good" />
-          <SnapshotCard label="Outstanding"       value={formatCurrency(totalBalance)}     tone="danger" sub={`${formatNumber(withBalance)} with balance`} />
-          <SnapshotCard label="Students"          value={formatNumber(totalStudents)} />
-          <SnapshotCard label="With Balance"      value={formatNumber(withBalance)}        tone="warn" />
+          <SnapshotCard label={isFinanceV1 ? 'Total Assessment' : 'Total Payables'} value={formatCurrency(totalPayables)} sub={`${formatNumber(totalStudents)} students`} />
+          <SnapshotCard label="Payments"    value={formatCurrency(totalPayment)}  tone="good" />
+          <SnapshotCard label="Outstanding" value={formatCurrency(totalBalance)}  tone="danger" sub={`${formatNumber(withBalance)} with balance`} />
+          <SnapshotCard label="Students"    value={formatNumber(totalStudents)} />
+          <SnapshotCard label="With Balance" value={formatNumber(withBalance)}   tone="warn" />
         </div>
       )}
 
