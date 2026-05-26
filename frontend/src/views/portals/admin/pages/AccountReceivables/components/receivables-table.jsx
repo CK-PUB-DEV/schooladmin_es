@@ -175,7 +175,7 @@ function ReceivablesTableV1({ data, loading }) {
 function ReceivablesTableV2({ data, loading }) {
   const [columnVisibility, setColumnVisibility] = useState({});
   const [columnFilters, setColumnFilters] = useState([]);
-  const [sorting, setSorting] = useState([{ id: 'balance', desc: true }]);
+  const [sorting, setSorting] = useState([{ id: 'total_fees', desc: true }]);
   const [globalFilter, setGlobalFilter] = useState('');
 
   const table = useReactTable({
@@ -212,8 +212,9 @@ function ReceivablesTableV2({ data, loading }) {
   }
 
   const filteredRows = table.getFilteredRowModel().rows;
-  const totalReceivable = filteredRows.reduce((sum, row) => sum + Number(row.original.balance || 0), 0);
+  const totalPayables = filteredRows.reduce((sum, row) => sum + Number(row.original.total_fees || 0), 0);
   const totalPaid = filteredRows.reduce((sum, row) => sum + Number(row.original.total_paid || 0), 0);
+  const totalBalance = filteredRows.reduce((sum, row) => sum + Number(row.original.balance || 0), 0);
   const totalOverpayment = filteredRows.reduce(
     (sum, row) => sum + Number(row.original.overpayment || 0),
     0
@@ -236,10 +237,13 @@ function ReceivablesTableV2({ data, loading }) {
             <span className="font-medium text-foreground">{filteredRows.length}</span> students
           </div>
           <div className="text-muted-foreground">
-            Receivable: <span className="font-semibold text-foreground">{formatCurrency(totalReceivable)}</span>
+            Payables: <span className="font-semibold text-foreground">{formatCurrency(totalPayables)}</span>
           </div>
           <div className="text-muted-foreground">
             Paid: <span className="font-semibold text-emerald-700">{formatCurrency(totalPaid)}</span>
+          </div>
+          <div className="text-muted-foreground">
+            Balance: <span className="font-semibold text-rose-700">{formatCurrency(totalBalance)}</span>
           </div>
           {totalOverpayment > 0 && (
             <div className="text-muted-foreground">

@@ -4,13 +4,39 @@ import { apiUrl } from '../../../../../lib/api';
 import { Card, CardContent } from '../../../../../components/ui/card';
 import { Button } from '../../../../../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../../../components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../../../../components/ui/tabs';
 import { Input } from '../../../../../components/ui/input';
 import { RefreshCcw, Download } from 'lucide-react';
-import { ReceivablesStats } from './components/receivables-stats';
 import { ReceivablesTable } from './components/receivables-table';
 
 const PER_PAGE = 200;
+
+const formatCurrency = (value) =>
+  new Intl.NumberFormat('en-PH', {
+    style: 'currency',
+    currency: 'PHP',
+  }).format(Number(value) || 0);
+
+const formatNumber = (value) => new Intl.NumberFormat('en-US').format(Number(value) || 0);
+
+function SnapshotCard({ label, value, tone = 'default' }) {
+  const toneClass =
+    tone === 'good'
+      ? 'text-emerald-700'
+      : tone === 'warn'
+        ? 'text-amber-700'
+        : tone === 'danger'
+          ? 'text-rose-700'
+          : 'text-foreground';
+
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="text-xs font-medium text-muted-foreground">{label}</div>
+        <div className={`mt-1 text-2xl font-semibold tracking-tight ${toneClass}`}>{value}</div>
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function AccountReceivables() {
   const selectedSchool = JSON.parse(localStorage.getItem('selectedSchool') || 'null');
@@ -69,7 +95,7 @@ export default function AccountReceivables() {
   useEffect(() => {
     if (!selectedSy || !selectedSem) return;
 
-    if ((startDate && !endDate) || (!startDate && endDate)) return;
+    if (isFinanceV1 && ((startDate && !endDate) || (!startDate && endDate))) return;
 
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
@@ -257,8 +283,8 @@ export default function AccountReceivables() {
       payload.endDate = endDate || null;
     } else {
       payload.dateFilter = null;
-      payload.startDate = startDate || null;
-      payload.endDate = endDate || null;
+      payload.startDate = null;
+      payload.endDate = null;
     }
 
     return { ...payload, ...extra };
@@ -377,7 +403,7 @@ export default function AccountReceivables() {
       return;
     }
 
-    if ((startDate && !endDate) || (!startDate && endDate)) {
+    if (isFinanceV1 && ((startDate && !endDate) || (!startDate && endDate))) {
       toast.error('Select both start and end dates');
       return;
     }
@@ -421,6 +447,13 @@ export default function AccountReceivables() {
     : selectedProgram === 'all'
       ? sortedLevels
       : sortedLevels.filter((level) => `${level.acadprogid}` === selectedProgram);
+  const summary = summaryData?.summary || {};
+  const totalReceivable = Number(summary.total_receivable) || 0;
+  const totalPayment = Number(summary.total_payment) || 0;
+  const outstandingBalance = Number(summary.total_balance ?? summary.total_receivable) || 0;
+  const totalStudents = Number(summary.total_students) || 0;
+  const studentsWithBalance = Number(summary.students_with_balance) || 0;
+  const totalOverpayment = Number(summary.total_overpayment) || 0;
 
   return (
     <div className="space-y-4 p-6">
@@ -697,28 +730,6 @@ export default function AccountReceivables() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="w-[140px]">
-                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
-                    Start Date
-                  </label>
-                  <Input
-                    type="date"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                    className="h-9"
-                  />
-                </div>
-                <div className="w-[140px]">
-                  <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
-                    End Date
-                  </label>
-                  <Input
-                    type="date"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                    className="h-9"
-                  />
-                </div>
                 <Button variant="outline" size="sm" onClick={handleExport} className="h-9">
                   <Download className="h-4 w-4 mr-2" />
                   Export
@@ -729,37 +740,38 @@ export default function AccountReceivables() {
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="summary" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="summary">Summary & Analysis</TabsTrigger>
-          <TabsTrigger value="receivables">Receivables</TabsTrigger>
-        </TabsList>
+      {summaryLoading && !summaryData ? (
+        <div className="flex min-h-[140px] items-center justify-center rounded-md border bg-background">
+          <div className="text-center">
+            <RefreshCcw className="mx-auto mb-2 h-7 w-7 animate-spin text-primary" />
+            <p className="text-sm text-muted-foreground">Loading receivables...</p>
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <SnapshotCard label="Total Receivables" value={formatCurrency(totalReceivable)} />
+          <SnapshotCard label="Payments" value={formatCurrency(totalPayment)} tone="good" />
+          <SnapshotCard label="Outstanding Balance" value={formatCurrency(outstandingBalance)} tone="danger" />
+          <SnapshotCard label="Students" value={formatNumber(totalStudents)} />
+          <SnapshotCard label="With Balance" value={formatNumber(studentsWithBalance)} tone="warn" />
+        </div>
+      )}
 
-        <TabsContent value="summary" className="space-y-4">
-          {summaryLoading && !summaryData ? (
-            <div className="flex items-center justify-center min-h-[240px]">
-              <div className="text-center">
-                <RefreshCcw className="h-8 w-8 animate-spin mx-auto mb-2 text-primary" />
-                <p className="text-sm text-muted-foreground">Loading summary data...</p>
-              </div>
-            </div>
-          ) : (
-            <ReceivablesStats data={summaryData} />
-          )}
-        </TabsContent>
+      {totalOverpayment > 0 && (
+        <div className="rounded-md border border-amber-200 bg-amber-500/10 px-4 py-2 text-sm text-amber-800">
+          Overpayments: <span className="font-semibold">{formatCurrency(totalOverpayment)}</span>
+        </div>
+      )}
 
-        <TabsContent value="receivables" className="space-y-4">
-          <Card data-watermark="TABLE">
-            <CardContent className="pt-6">
-              <ReceivablesTable
-                data={receivables}
-                loading={listLoading}
-                isFinanceV1={isFinanceV1}
-              />
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+      <Card data-watermark="TABLE">
+        <CardContent className="pt-6">
+          <ReceivablesTable
+            data={receivables}
+            loading={listLoading}
+            isFinanceV1={isFinanceV1}
+          />
+        </CardContent>
+      </Card>
     </div>
   );
 }

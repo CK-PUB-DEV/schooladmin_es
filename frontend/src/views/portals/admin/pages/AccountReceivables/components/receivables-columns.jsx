@@ -1,6 +1,5 @@
 import { ArrowUpDown } from 'lucide-react';
 import { Button } from '../../../../../../components/ui/button';
-import { Badge } from '../../../../../../components/ui/badge';
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('en-PH', {
@@ -34,15 +33,8 @@ export const receivableColumns = [
     },
   },
   {
-    accessorKey: 'program_name',
-    header: 'Program',
-    cell: ({ row }) => (
-      <div className="text-sm text-muted-foreground">{row.getValue('program_name') || 'N/A'}</div>
-    ),
-  },
-  {
     accessorKey: 'level_name',
-    header: 'Grade Level',
+    header: 'Level',
     cell: ({ row }) => (
       <div className="text-sm">{row.getValue('level_name') || 'N/A'}</div>
     ),
@@ -54,7 +46,7 @@ export const receivableColumns = [
         variant="ghost"
         onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
       >
-        Total Fees
+        Payables
         <ArrowUpDown className="ml-2 h-4 w-4" />
       </Button>
     ),
@@ -69,7 +61,7 @@ export const receivableColumns = [
         variant="ghost"
         onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
       >
-        Total Paid
+        Paid
         <ArrowUpDown className="ml-2 h-4 w-4" />
       </Button>
     ),
@@ -118,36 +110,11 @@ export const receivableColumns = [
     },
   },
   {
-    id: 'status',
-    header: 'Status',
+    accessorKey: 'last_calculated_at',
+    header: 'Updated',
     cell: ({ row }) => {
-      const balance = Number(row.original.balance) || 0;
-      const overpayment = Number(row.original.overpayment) || 0;
-
-      if (overpayment > 0) {
-        return (
-          <Badge
-            variant="outline"
-            className="border-amber-200 bg-amber-500/10 text-amber-700"
-          >
-            Overpaid
-          </Badge>
-        );
-      }
-
-      if (balance > 0) {
-        return (
-          <Badge variant="outline" className="border-rose-200 bg-rose-500/10 text-rose-700">
-            With Balance
-          </Badge>
-        );
-      }
-
-      return (
-        <Badge variant="outline" className="border-emerald-200 bg-emerald-500/10 text-emerald-700">
-          Cleared
-        </Badge>
-      );
+      const value = row.getValue('last_calculated_at');
+      return <div className="text-xs text-muted-foreground">{value || '-'}</div>;
     },
   },
 ];

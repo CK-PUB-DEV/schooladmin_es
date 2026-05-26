@@ -22,6 +22,7 @@ const emptyReceivableSummary = () => ({
   total_discount: 0,
   total_payment: 0,
   total_receivable: 0,
+  total_balance: 0,
   total_students: 0,
   students_with_balance: 0,
   average_balance: 0,
@@ -1010,7 +1011,8 @@ const fetchStudentTransactionSummaryTotals = async (db, filters) => {
       SELECT
         COALESCE(SUM(st.total_payables), 0) as total_assessment,
         COALESCE(SUM(st.total_payment), 0) as total_payment,
-        COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN st.total_balance ELSE 0 END), 0) as total_receivable,
+        COALESCE(SUM(st.total_payables), 0) as total_receivable,
+        COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN st.total_balance ELSE 0 END), 0) as total_balance,
         COALESCE(SUM(st.total_overpayment), 0) as total_overpayment,
         COUNT(*) as total_students,
         COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN 1 ELSE 0 END), 0) as students_with_balance,
@@ -1023,6 +1025,7 @@ const fetchStudentTransactionSummaryTotals = async (db, filters) => {
 
   const row = rows[0] || {};
   const totalReceivable = toNumber(row.total_receivable);
+  const totalBalance = toNumber(row.total_balance);
   const studentsWithBalance = toNumber(row.students_with_balance);
 
   return {
@@ -1031,11 +1034,12 @@ const fetchStudentTransactionSummaryTotals = async (db, filters) => {
       total_discount: 0,
       total_payment: Number(toNumber(row.total_payment).toFixed(2)),
       total_receivable: Number(totalReceivable.toFixed(2)),
+      total_balance: Number(totalBalance.toFixed(2)),
       total_students: toNumber(row.total_students),
       students_with_balance: studentsWithBalance,
       average_balance:
         studentsWithBalance > 0
-          ? Number((totalReceivable / studentsWithBalance).toFixed(2))
+          ? Number((totalBalance / studentsWithBalance).toFixed(2))
           : 0,
       total_overpayment: Number(toNumber(row.total_overpayment).toFixed(2)),
       overpaid_count: toNumber(row.overpaid_count),
@@ -1337,28 +1341,17 @@ export const getAccountReceivableSummary = async (req, res) => {
 
     if (shouldUseStudentTransactions({ dateRange, useStudledger })) {
       try {
-        const studentsWithTotals = await fetchAllStudentTransactionRows(db, {
+        const summaryData = await fetchStudentTransactionSummaryTotals(db, {
           syid,
           semid,
           programId: programId ? Number(programId) : null,
           levelId: levelId ? Number(levelId) : null,
           search: search || null,
         });
-        const bySchoolYear = await buildSyComparisonFromStudentTransactions(db, {
-          programId: programId ? Number(programId) : null,
-          levelId: levelId ? Number(levelId) : null,
-          semid,
-        });
-
-        const summaryData = studentsWithTotals.length
-          ? buildSummary(studentsWithTotals)
-          : {
-              summary: emptyReceivableSummary(),
-              byProgram: [],
-              byGradeLevel: [],
-              balanceTiers: [],
-            };
-        summaryData.bySchoolYear = bySchoolYear;
+        summaryData.byProgram = [];
+        summaryData.byGradeLevel = [];
+        summaryData.balanceTiers = [];
+        summaryData.bySchoolYear = [];
         summaryData.appliedDateRange = dateRange;
         summaryData.source = 'student_transactions';
 
