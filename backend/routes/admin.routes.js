@@ -29,6 +29,7 @@ import {
   getAccountReceivableFilters,
   getAccountReceivableList,
   getAccountReceivableSummary,
+  getAccountReceivableTransactions,
 } from '../controllers/accountReceivablesController.js';
 import {
   getDailyCashSummary,
@@ -282,6 +283,9 @@ router.post(
   verifyToken,
   routeFinance(getAccountReceivableList, getFinanceV1ReceivableList)
 );
+
+// POST /api/admin/receivables/transactions - Get student_ledger entries (V2 only, lazy tab)
+router.post('/receivables/transactions', verifyToken, getAccountReceivableTransactions);
 
 // Daily Cash Progress Routes (all require authentication)
 // POST /api/admin/cash-progress/summary - Get daily cash summary

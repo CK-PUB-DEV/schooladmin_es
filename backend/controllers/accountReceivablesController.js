@@ -1501,6 +1501,74 @@ const buildSyComparison = async (db, options) => {
   return comparison;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// V2 SIMPLIFIED SUMMARY  (student_transactions + per-level breakdown via
+// the correct enrollment table — no per-student recalculation)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Map program / level filter to the enrollment table(s) to join.
+ * programId 2,3,4 → basic education (enrolledstud)
+ * programId 5     → SHS (sh_enrolledstud)
+ * anything else   → college/HE (college_enrolledstud)
+ * levelId 1-13    → enrolledstud,  14-15 → sh_enrolledstud,  16+ → college_enrolledstud
+ */
+const resolveEnrollTables = ({ programId, levelId }) => {
+  if (levelId) {
+    if (levelId >= 14 && levelId <= 15) return [{ table: 'sh_enrolledstud',      useSemJoin: true }];
+    if (levelId >= 16)                  return [{ table: 'college_enrolledstud', useSemJoin: true }];
+    return                                     [{ table: 'enrolledstud',          useSemJoin: false }];
+  }
+  if (programId) {
+    if ([2, 3, 4].includes(programId)) return [{ table: 'enrolledstud',          useSemJoin: false }];
+    if (programId === 5)               return [{ table: 'sh_enrolledstud',      useSemJoin: true }];
+    return                                    [{ table: 'college_enrolledstud', useSemJoin: true }];
+  }
+  return [
+    { table: 'enrolledstud',          useSemJoin: false },
+    { table: 'sh_enrolledstud',      useSemJoin: true  },
+    { table: 'college_enrolledstud', useSemJoin: true  },
+  ];
+};
+
+/**
+ * Per-level breakdown: join student_transactions with one enrollment table.
+ * Only includes students present in that table for the given sy/sem.
+ */
+const queryEnrollBreakdown = async (db, { syid, semid, table, useSemJoin, programId, levelId }) => {
+  const params = [syid];
+  const where  = ['st.syid = ?'];
+
+  if (semid) { where.push('st.semid = ?'); params.push(semid); }
+  if (levelId)   { where.push('e.levelid = ?');       params.push(levelId); }
+  if (programId) { where.push('gl.acadprogid = ?');   params.push(programId); }
+
+  const semJoin = useSemJoin && semid ? 'AND e.semid = st.semid' : '';
+
+  const [rows] = await db.execute(
+    `SELECT
+       gl.id                                                                 AS level_id,
+       gl.levelname,
+       gl.acadprogid                                                         AS acadprog_id,
+       ap.progname                                                           AS program_name,
+       COALESCE(SUM(st.total_payables), 0)                                  AS total_payables,
+       COALESCE(SUM(st.total_payment), 0)                                   AS total_payment,
+       COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN st.total_balance ELSE 0 END), 0) AS total_balance,
+       COALESCE(SUM(st.total_overpayment), 0)                               AS total_overpayment,
+       COUNT(DISTINCT st.studid)                                             AS student_count
+     FROM student_transactions st
+     JOIN ${table} e
+       ON e.studid = st.studid AND e.syid = st.syid AND e.deleted = 0 ${semJoin}
+     JOIN gradelevel gl ON gl.id = e.levelid
+     JOIN academicprogram ap ON ap.id = gl.acadprogid
+     WHERE ${where.join(' AND ')}
+     GROUP BY gl.id, gl.levelname, gl.acadprogid, ap.progname
+     ORDER BY ap.progname, gl.levelname`,
+    params
+  );
+  return rows;
+};
+
 export const getAccountReceivableFilters = async (req, res) => {
   try {
     const { schoolDbConfig } = req.body;
@@ -1703,140 +1771,167 @@ export const getAccountReceivableList = async (req, res) => {
  * - startDate: YYYY-MM-DD (used when dateFilter is 'custom' or not specified)
  * - endDate: YYYY-MM-DD (used when dateFilter is 'custom' or not specified)
  */
+/**
+ * V2 Account Receivables Summary
+ *
+ * Two fast queries in parallel:
+ *  1. Direct SUM from student_transactions (no join, sub-second)
+ *  2. Per-level/program breakdown via the correct enrollment table only
+ *
+ * No per-student loops, no fallback to slow recalculation.
+ */
 export const getAccountReceivableSummary = async (req, res) => {
+  let db;
   try {
-    const {
-      schoolDbConfig,
-      syid,
-      semid,
-      programId,
-      levelId,
-      search,
-      dateFilter,
-      startDate,
-      endDate,
-      useStudledger = false, // Finance V1 flag to use studledger-based calculation
-    } = req.body;
+    const { schoolDbConfig, syid, semid, programId, levelId } = req.body;
 
-    if (!schoolDbConfig) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'School database configuration is required',
-      });
+    if (!schoolDbConfig || !syid) {
+      return res.status(400).json({ status: 'error', message: 'schoolDbConfig and syid are required' });
     }
 
-    // Process date range filter
-    const dateRange = getDateRangeFromFilter(dateFilter, startDate, endDate);
+    const numProgramId = programId ? Number(programId) : null;
+    const numLevelId   = levelId   ? Number(levelId)   : null;
 
-    const db = await getSchoolConnection(schoolDbConfig);
+    db = await getSchoolConnection(schoolDbConfig);
 
-    const summaryFilters = {
-      syid,
-      semid,
-      programId: programId ? Number(programId) : null,
-      levelId: levelId ? Number(levelId) : null,
-      search: search || null,
-    };
+    // ── Query 1: main totals from student_transactions ────────────
+    const tParams = [syid];
+    const tWhere  = ['syid = ?'];
+    if (semid) { tWhere.push('semid = ?'); tParams.push(semid); }
 
-    // Tier 1 — student_transactions (pre-computed, fastest)
-    if (shouldUseStudentTransactions({ dateRange, useStudledger })) {
-      try {
-        const [summaryData, bySchoolYear] = await Promise.all([
-          fetchStudentTransactionFullSummary(db, summaryFilters),
-          buildSyComparisonFromStudentTransactions(db, {
-            programId: summaryFilters.programId,
-            levelId: summaryFilters.levelId,
-            semid,
-          }),
-        ]);
+    // ── Query 2: per-level breakdown via enrollment tables ────────
+    const tables = resolveEnrollTables({ programId: numProgramId, levelId: numLevelId });
 
-        await db.end();
-        return res.status(200).json({
-          status: 'success',
-          data: { ...summaryData, bySchoolYear, appliedDateRange: dateRange, source: 'student_transactions' },
-        });
-      } catch (err) {
-        if (!isMissingStudentTransactionsTable(err)) {
-          console.warn('student_transactions summary error, trying student_ledger:', err.message);
-        }
-      }
+    const [totalsResult, ...breakdownResults] = await Promise.all([
+      db.execute(
+        `SELECT
+           COALESCE(SUM(total_payables), 0)                                  AS total_payables,
+           COALESCE(SUM(total_payment), 0)                                   AS total_payment,
+           COALESCE(SUM(CASE WHEN total_balance > 0 THEN total_balance ELSE 0 END), 0) AS total_balance,
+           COALESCE(SUM(total_overpayment), 0)                               AS total_overpayment,
+           COUNT(*)                                                           AS student_count,
+           SUM(CASE WHEN total_balance > 0 THEN 1 ELSE 0 END)               AS students_with_balance
+         FROM student_transactions
+         WHERE ${tWhere.join(' AND ')}`,
+        tParams
+      ),
+      ...tables.map(({ table, useSemJoin }) =>
+        queryEnrollBreakdown(db, {
+          syid, semid, table, useSemJoin,
+          programId: numProgramId,
+          levelId: numLevelId,
+        })
+      ),
+    ]);
 
-      // Tier 2 — student_ledger running totals (fast aggregate, no per-student loop)
-      try {
-        const [summaryData, bySchoolYear] = await Promise.all([
-          fetchStudentLedgerFullSummary(db, summaryFilters),
-          buildSyComparisonFromStudentLedger(db, {
-            programId: summaryFilters.programId,
-            levelId: summaryFilters.levelId,
-            semid,
-          }),
-        ]);
+    const totals = totalsResult[0][0] || {};
+    const breakdown = breakdownResults.flat();
 
-        await db.end();
-        return res.status(200).json({
-          status: 'success',
-          data: { ...summaryData, bySchoolYear, appliedDateRange: dateRange, source: 'student_ledger' },
-        });
-      } catch (ledgerErr) {
-        console.warn('student_ledger summary error, falling back to calculation:', ledgerErr.message);
-      }
-    }
-
-    // Tier 3 — full per-student recalculation (slowest; only for date-filtered or studledger mode)
-    const schoolInfo = await getSchoolInfo(db);
-    const balClassId = await getBalForwardClassId(db);
-
-    const students = await fetchStudents(db, summaryFilters);
-
-    const bySchoolYear = await buildSyComparison(db, {
-      programId: summaryFilters.programId,
-      levelId: summaryFilters.levelId,
-      semid,
-      schoolInfo,
-      balClassId,
-      useStudledger,
-      dateRange,
-    });
-
-    if (!students.length) {
-      await db.end();
-      return res.status(200).json({
-        status: 'success',
-        data: {
-          summary: { ...emptyReceivableSummary() },
-          byProgram: [],
-          byGradeLevel: [],
-          balanceTiers: [],
-          bySchoolYear,
-          appliedDateRange: dateRange,
-        },
-      });
-    }
-
-    const studentsWithTotals = [];
-    for (const student of students) {
-      const totals = await calculateStudentTotals(
-        db, student, syid, semid, schoolInfo, balClassId, useStudledger, dateRange
-      );
-      studentsWithTotals.push({ ...student, ...totals });
-    }
-
-    const summaryData = buildSummary(studentsWithTotals);
-    summaryData.bySchoolYear = bySchoolYear;
-    summaryData.appliedDateRange = dateRange;
-    await db.end();
-
-    res.status(200).json({
+    return res.status(200).json({
       status: 'success',
-      data: summaryData,
+      data: {
+        total_payables:       Number(toNumber(totals.total_payables).toFixed(2)),
+        total_payment:        Number(toNumber(totals.total_payment).toFixed(2)),
+        total_balance:        Number(toNumber(totals.total_balance).toFixed(2)),
+        total_overpayment:    Number(toNumber(totals.total_overpayment).toFixed(2)),
+        student_count:        toNumber(totals.student_count),
+        students_with_balance: toNumber(totals.students_with_balance),
+        breakdown: breakdown.map((r) => ({
+          level_id:       r.level_id,
+          levelname:      r.levelname,
+          acadprog_id:    r.acadprog_id,
+          program_name:   r.program_name,
+          total_payables:    Number(toNumber(r.total_payables).toFixed(2)),
+          total_payment:     Number(toNumber(r.total_payment).toFixed(2)),
+          total_balance:     Number(toNumber(r.total_balance).toFixed(2)),
+          total_overpayment: Number(toNumber(r.total_overpayment).toFixed(2)),
+          student_count:     toNumber(r.student_count),
+        })),
+        source: 'student_transactions',
+      },
     });
   } catch (error) {
     console.error('Error fetching account receivables summary:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch account receivables summary',
-      error: error.message,
+    res.status(500).json({ status: 'error', message: 'Failed to fetch receivables summary', error: error.message });
+  } finally {
+    if (db) await db.end().catch(() => {});
+  }
+};
+
+/**
+ * V2 Account Receivable Transactions
+ * Returns paginated student_ledger rows for the transactions tab.
+ * Only called when the user opens that tab.
+ */
+export const getAccountReceivableTransactions = async (req, res) => {
+  let db;
+  try {
+    const { schoolDbConfig, syid, semid, studid, search, page = 1, perPage = 100 } = req.body;
+
+    if (!schoolDbConfig || !syid) {
+      return res.status(400).json({ status: 'error', message: 'schoolDbConfig and syid are required' });
+    }
+
+    db = await getSchoolConnection(schoolDbConfig);
+
+    const params = [syid];
+    const where  = ['sl.syid = ?'];
+    if (semid)  { where.push('sl.semid = ?');  params.push(semid); }
+    if (studid) { where.push('sl.studid = ?'); params.push(studid); }
+    if (search) {
+      where.push(`(si.sid LIKE ? OR CONCAT_WS(' ', si.lastname, si.firstname, si.middlename) LIKE ?)`);
+      params.push(`%${search}%`, `%${search}%`);
+    }
+
+    const whereStr   = `WHERE ${where.join(' AND ')}`;
+    const safePage   = Math.max(1, Number(page)    || 1);
+    const safePerPage = Math.min(500, Math.max(1, Number(perPage) || 100));
+    const offset     = (safePage - 1) * safePerPage;
+
+    const [[countRows], [rows]] = await Promise.all([
+      db.execute(
+        `SELECT COUNT(*) AS total FROM student_ledger sl JOIN studinfo si ON si.id = sl.studid ${whereStr}`,
+        params
+      ),
+      db.execute(
+        `SELECT
+           sl.id,
+           sl.studid,
+           sl.type,
+           sl.description,
+           sl.amount,
+           sl.updated_payables,
+           sl.updated_payment,
+           sl.updated_balance,
+           sl.updated_overpayment,
+           sl.created_at,
+           si.sid,
+           CONCAT_WS(' ', si.lastname, si.firstname, si.middlename) AS full_name
+         FROM student_ledger sl
+         JOIN studinfo si ON si.id = sl.studid
+         ${whereStr}
+         ORDER BY sl.id DESC
+         LIMIT ${safePerPage} OFFSET ${offset}`,
+        params
+      ),
+    ]);
+
+    const total = toNumber(countRows[0]?.total);
+    return res.status(200).json({
+      status: 'success',
+      data: rows,
+      meta: {
+        total,
+        page: safePage,
+        per_page: safePerPage,
+        pages: Math.ceil(total / safePerPage),
+      },
     });
+  } catch (error) {
+    console.error('Error fetching account receivable transactions:', error);
+    res.status(500).json({ status: 'error', message: 'Failed to fetch transactions', error: error.message });
+  } finally {
+    if (db) await db.end().catch(() => {});
   }
 };
 
