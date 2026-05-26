@@ -11,6 +11,7 @@ const getSchoolConnection = async (schoolDbConfig) => {
     password: schoolDbConfig.db_password || '',
     database: schoolDbConfig.db_name,
     port: resolvedPort,
+    connectTimeout: 15000,
   });
   return connection;
 };
@@ -1162,30 +1163,33 @@ const fetchStudentTransactionSummaryTotals = async (db, { syid, semid, programId
 };
 
 /**
- * Fallback when student_transactions table is absent.
- * Gets the latest running totals per student from student_ledger (last entry by id),
- * which is much faster than per-student fee recalculation.
+ * Build the base FROM / WHERE parts for student_ledger queries.
+ * Inner subquery gets the max-id (latest) entry per student for the given sy/sem,
+ * giving us the most up-to-date running totals without per-student calculation.
+ *
+ * student_ledger has no `deleted` column — filter only on syid/semid.
+ * Returns { from, where, params } mirroring buildStudentTransactionQueryParts.
  */
-const fetchStudentLedgerBalances = async (db, { syid, semid, programId, levelId, search, page = 1, perPage = 200 }) => {
-  const innerWhere = ['sl_inner.deleted = 0', 'sl_inner.syid = ?'];
+const buildStudentLedgerQueryParts = ({ syid, semid, programId, levelId, search }) => {
+  const innerCond = ['syid = ?'];
   const innerParams = [syid];
   if (semid) {
-    innerWhere.push('sl_inner.semid = ?');
+    innerCond.push('semid = ?');
     innerParams.push(semid);
   }
 
-  const outerWhere = ['si.deleted = 0'];
+  const outerCond = ['si.deleted = 0'];
   const outerParams = [];
   if (programId) {
-    outerWhere.push('gl.acadprogid = ?');
+    outerCond.push('gl.acadprogid = ?');
     outerParams.push(programId);
   }
   if (levelId) {
-    outerWhere.push('si.levelid = ?');
+    outerCond.push('si.levelid = ?');
     outerParams.push(levelId);
   }
   if (search) {
-    outerWhere.push(`(
+    outerCond.push(`(
       si.sid LIKE ?
       OR CONCAT_WS(' ', si.lastname, si.firstname, si.middlename) LIKE ?
       OR CONCAT_WS(' ', si.firstname, si.middlename, si.lastname) LIKE ?
@@ -1194,31 +1198,49 @@ const fetchStudentLedgerBalances = async (db, { syid, semid, programId, levelId,
     outerParams.push(term, term, term);
   }
 
-  const allParams = [...innerParams, ...innerParams, ...outerParams];
+  // params order: inner subquery params first, then outer WHERE params
+  const params = [...innerParams, ...outerParams];
 
-  const baseFrom = `
+  const from = `
     FROM (
       SELECT sl.studid,
-             sl.updated_payables  AS total_payables,
-             sl.updated_payment   AS total_payment,
-             sl.updated_balance   AS total_balance,
+             sl.updated_payables    AS total_payables,
+             sl.updated_payment     AS total_payment,
+             sl.updated_balance     AS total_balance,
              sl.updated_overpayment AS total_overpayment
       FROM student_ledger sl
       INNER JOIN (
         SELECT studid, MAX(id) AS max_id
-        FROM student_ledger sl_inner
-        WHERE ${innerWhere.join(' AND ')}
+        FROM student_ledger
+        WHERE ${innerCond.join(' AND ')}
         GROUP BY studid
       ) latest ON sl.id = latest.max_id
     ) sl_data
     JOIN studinfo si ON si.id = sl_data.studid
     LEFT JOIN gradelevel gl ON gl.id = si.levelid
     LEFT JOIN academicprogram ap ON ap.id = gl.acadprogid
-    WHERE ${outerWhere.join(' AND ')}
   `;
 
+  return { from, where: `WHERE ${outerCond.join(' AND ')}`, params };
+};
+
+/**
+ * Fallback list when student_transactions is absent.
+ * Uses student_ledger running totals — much faster than per-student recalculation.
+ */
+const fetchStudentLedgerBalances = async (db, { syid, semid, programId, levelId, search, page = 1, perPage = 200 }) => {
+  const { from, where, params } = buildStudentLedgerQueryParts({
+    syid, semid, programId, levelId, search,
+  });
+
+  const safePage = Math.max(1, Number(page) || 1);
+  const safePerPage = Math.max(0, Number(perPage) || 0);
+  const limitClause = safePerPage > 0
+    ? `LIMIT ${safePerPage} OFFSET ${(safePage - 1) * safePerPage}`
+    : '';
+
   const [[countRows], [dataRows]] = await Promise.all([
-    db.execute(`SELECT COUNT(*) AS total ${baseFrom}`, allParams),
+    db.execute(`SELECT COUNT(*) AS total ${from} ${where}`, params),
     db.execute(
       `SELECT
          sl_data.studid,
@@ -1238,24 +1260,163 @@ const fetchStudentLedgerBalances = async (db, { syid, semid, programId, levelId,
          gl.levelname  AS level_name,
          gl.acadprogid AS acadprog_id,
          ap.progname   AS program_name
-       ${baseFrom}
+       ${from} ${where}
        ORDER BY sl_data.total_balance DESC, si.lastname, si.firstname
-       ${perPage > 0 ? `LIMIT ${perPage} OFFSET ${(Math.max(1, page) - 1) * perPage}` : ''}`,
-      allParams
+       ${limitClause}`,
+      params
     ),
   ]);
 
-  const total = toNumber(countRows[0]?.total);
   return {
     rows: dataRows.map((row) => mapStudentTransactionRow({
       ...row,
       transaction_id: null,
       last_calculated_at: null,
     })),
-    total,
-    page: Math.max(1, page),
-    perPage,
+    total: toNumber(countRows[0]?.total),
+    page: safePage,
+    perPage: safePerPage,
   };
+};
+
+/**
+ * Fallback summary when student_transactions is absent.
+ * Runs the same four aggregation queries as fetchStudentTransactionFullSummary
+ * but sources data from student_ledger running totals instead.
+ */
+const fetchStudentLedgerFullSummary = async (db, { syid, semid, programId, levelId, search }) => {
+  const { from, where, params } = buildStudentLedgerQueryParts({
+    syid, semid, programId, levelId, search,
+  });
+
+  const [[summaryRows], [programRows], [levelRows], [tierRows]] = await Promise.all([
+    db.execute(
+      `SELECT
+         COALESCE(SUM(sl_data.total_payables), 0)                                                    AS total_assessment,
+         COALESCE(SUM(sl_data.total_payment), 0)                                                     AS total_payment,
+         COALESCE(SUM(CASE WHEN sl_data.total_balance > 0 THEN sl_data.total_balance ELSE 0 END), 0) AS total_balance,
+         COALESCE(SUM(sl_data.total_overpayment), 0)                                                 AS total_overpayment,
+         COUNT(*)                                                                                     AS total_students,
+         COALESCE(SUM(CASE WHEN sl_data.total_balance > 0 THEN 1 ELSE 0 END), 0)                    AS students_with_balance,
+         COALESCE(SUM(CASE WHEN sl_data.total_overpayment > 0 THEN 1 ELSE 0 END), 0)                AS overpaid_count
+       ${from} ${where}`,
+      params
+    ),
+    db.execute(
+      `SELECT
+         ap.id                                                                                        AS program_id,
+         COALESCE(ap.progname, 'Unknown')                                                            AS program_name,
+         COALESCE(SUM(CASE WHEN sl_data.total_balance > 0 THEN sl_data.total_balance ELSE 0 END), 0) AS total_balance,
+         COUNT(*)                                                                                     AS student_count
+       ${from} ${where}
+       GROUP BY ap.id, ap.progname
+       ORDER BY total_balance DESC`,
+      params
+    ),
+    db.execute(
+      `SELECT
+         gl.id                                                                                        AS level_id,
+         COALESCE(gl.levelname, 'Unknown')                                                           AS level_name,
+         COALESCE(SUM(CASE WHEN sl_data.total_balance > 0 THEN sl_data.total_balance ELSE 0 END), 0) AS total_balance,
+         COUNT(*)                                                                                     AS student_count
+       ${from} ${where}
+       GROUP BY gl.id, gl.levelname
+       ORDER BY total_balance DESC`,
+      params
+    ),
+    db.execute(
+      `SELECT
+         COALESCE(SUM(CASE WHEN sl_data.total_balance > 0    AND sl_data.total_balance < 1000  THEN 1 ELSE 0 END), 0)                   AS t1_count,
+         COALESCE(SUM(CASE WHEN sl_data.total_balance > 0    AND sl_data.total_balance < 1000  THEN sl_data.total_balance ELSE 0 END), 0) AS t1_total,
+         COALESCE(SUM(CASE WHEN sl_data.total_balance >= 1000  AND sl_data.total_balance < 5000  THEN 1 ELSE 0 END), 0)                   AS t2_count,
+         COALESCE(SUM(CASE WHEN sl_data.total_balance >= 1000  AND sl_data.total_balance < 5000  THEN sl_data.total_balance ELSE 0 END), 0) AS t2_total,
+         COALESCE(SUM(CASE WHEN sl_data.total_balance >= 5000  AND sl_data.total_balance < 20000 THEN 1 ELSE 0 END), 0)                   AS t3_count,
+         COALESCE(SUM(CASE WHEN sl_data.total_balance >= 5000  AND sl_data.total_balance < 20000 THEN sl_data.total_balance ELSE 0 END), 0) AS t3_total,
+         COALESCE(SUM(CASE WHEN sl_data.total_balance >= 20000                                   THEN 1 ELSE 0 END), 0)                   AS t4_count,
+         COALESCE(SUM(CASE WHEN sl_data.total_balance >= 20000                                   THEN sl_data.total_balance ELSE 0 END), 0) AS t4_total
+       ${from} ${where}`,
+      params
+    ),
+  ]);
+
+  const row = summaryRows[0] || {};
+  const totalBalance = toNumber(row.total_balance);
+  const studentsWithBalance = toNumber(row.students_with_balance);
+  const t = tierRows[0] || {};
+
+  const mapAvg = (total, count) =>
+    count > 0 ? Number((toNumber(total) / count).toFixed(2)) : 0;
+
+  return {
+    summary: {
+      total_assessment: Number(toNumber(row.total_assessment).toFixed(2)),
+      total_discount: 0,
+      total_payment: Number(toNumber(row.total_payment).toFixed(2)),
+      total_receivable: Number(totalBalance.toFixed(2)),
+      total_balance: Number(totalBalance.toFixed(2)),
+      total_students: toNumber(row.total_students),
+      students_with_balance: studentsWithBalance,
+      average_balance: studentsWithBalance > 0
+        ? Number((totalBalance / studentsWithBalance).toFixed(2))
+        : 0,
+      total_overpayment: Number(toNumber(row.total_overpayment).toFixed(2)),
+      overpaid_count: toNumber(row.overpaid_count),
+    },
+    byProgram: programRows.map((r) => ({
+      program_id: r.program_id || null,
+      program_name: r.program_name || 'Unknown Program',
+      total_balance: Number(toNumber(r.total_balance).toFixed(2)),
+      student_count: toNumber(r.student_count),
+      avg_balance: mapAvg(r.total_balance, toNumber(r.student_count)),
+    })),
+    byGradeLevel: levelRows.map((r) => ({
+      level_id: r.level_id || null,
+      level_name: r.level_name || 'Unknown Level',
+      total_balance: Number(toNumber(r.total_balance).toFixed(2)),
+      student_count: toNumber(r.student_count),
+      avg_balance: mapAvg(r.total_balance, toNumber(r.student_count)),
+    })),
+    balanceTiers: [
+      { label: '0 - 1k',  min: 0,     max: 1000,    count: toNumber(t.t1_count), total_balance: Number(toNumber(t.t1_total).toFixed(2)) },
+      { label: '1k - 5k', min: 1000,  max: 5000,    count: toNumber(t.t2_count), total_balance: Number(toNumber(t.t2_total).toFixed(2)) },
+      { label: '5k - 20k',min: 5000,  max: 20000,   count: toNumber(t.t3_count), total_balance: Number(toNumber(t.t3_total).toFixed(2)) },
+      { label: '20k+',    min: 20000, max: Infinity, count: toNumber(t.t4_count), total_balance: Number(toNumber(t.t4_total).toFixed(2)) },
+    ],
+  };
+};
+
+/**
+ * School-year comparison from student_ledger (fallback when student_transactions is absent).
+ */
+const buildSyComparisonFromStudentLedger = async (db, { programId, levelId, semid }) => {
+  const schoolYears = await getSchoolYears(db, 4);
+
+  return Promise.all(
+    schoolYears.map(async (sy) => {
+      const { from, where, params } = buildStudentLedgerQueryParts({
+        syid: sy.id,
+        semid,
+        programId,
+        levelId,
+        search: null,
+      });
+
+      const [rows] = await db.execute(
+        `SELECT
+           COALESCE(SUM(CASE WHEN sl_data.total_balance > 0 THEN sl_data.total_balance ELSE 0 END), 0) AS total_receivable,
+           COALESCE(SUM(CASE WHEN sl_data.total_balance > 0 THEN 1 ELSE 0 END), 0)                    AS students_with_balance
+         ${from} ${where}`,
+        params
+      );
+
+      return {
+        syid: sy.id,
+        sydesc: sy.sydesc,
+        total_receivable: Number(toNumber(rows[0]?.total_receivable).toFixed(2)),
+        students_with_balance: toNumber(rows[0]?.students_with_balance),
+      };
+    })
+  );
 };
 
 const buildSyComparisonFromStudentTransactions = async (db, { programId, levelId, semid }) => {
@@ -1569,56 +1730,67 @@ export const getAccountReceivableSummary = async (req, res) => {
 
     const db = await getSchoolConnection(schoolDbConfig);
 
-    if (shouldUseStudentTransactions({ dateRange, useStudledger })) {
-      try {
-        const filters = {
-          syid,
-          semid,
-          programId: programId ? Number(programId) : null,
-          levelId: levelId ? Number(levelId) : null,
-          search: search || null,
-        };
-        const [summaryData, bySchoolYear] = await Promise.all([
-          fetchStudentTransactionFullSummary(db, filters),
-          buildSyComparisonFromStudentTransactions(db, {
-            programId: filters.programId,
-            levelId: filters.levelId,
-            semid,
-          }),
-        ]);
-
-        await db.end();
-
-        return res.status(200).json({
-          status: 'success',
-          data: {
-            ...summaryData,
-            bySchoolYear,
-            appliedDateRange: dateRange,
-            source: 'student_transactions',
-          },
-        });
-      } catch (error) {
-        if (!isMissingStudentTransactionsTable(error)) {
-          console.warn('Falling back to calculated receivables summary:', error.message);
-        }
-      }
-    }
-
-    const schoolInfo = await getSchoolInfo(db);
-    const balClassId = await getBalForwardClassId(db);
-
-    const students = await fetchStudents(db, {
+    const summaryFilters = {
       syid,
       semid,
       programId: programId ? Number(programId) : null,
       levelId: levelId ? Number(levelId) : null,
       search: search || null,
-    });
+    };
+
+    // Tier 1 — student_transactions (pre-computed, fastest)
+    if (shouldUseStudentTransactions({ dateRange, useStudledger })) {
+      try {
+        const [summaryData, bySchoolYear] = await Promise.all([
+          fetchStudentTransactionFullSummary(db, summaryFilters),
+          buildSyComparisonFromStudentTransactions(db, {
+            programId: summaryFilters.programId,
+            levelId: summaryFilters.levelId,
+            semid,
+          }),
+        ]);
+
+        await db.end();
+        return res.status(200).json({
+          status: 'success',
+          data: { ...summaryData, bySchoolYear, appliedDateRange: dateRange, source: 'student_transactions' },
+        });
+      } catch (err) {
+        if (!isMissingStudentTransactionsTable(err)) {
+          console.warn('student_transactions summary error, trying student_ledger:', err.message);
+        }
+      }
+
+      // Tier 2 — student_ledger running totals (fast aggregate, no per-student loop)
+      try {
+        const [summaryData, bySchoolYear] = await Promise.all([
+          fetchStudentLedgerFullSummary(db, summaryFilters),
+          buildSyComparisonFromStudentLedger(db, {
+            programId: summaryFilters.programId,
+            levelId: summaryFilters.levelId,
+            semid,
+          }),
+        ]);
+
+        await db.end();
+        return res.status(200).json({
+          status: 'success',
+          data: { ...summaryData, bySchoolYear, appliedDateRange: dateRange, source: 'student_ledger' },
+        });
+      } catch (ledgerErr) {
+        console.warn('student_ledger summary error, falling back to calculation:', ledgerErr.message);
+      }
+    }
+
+    // Tier 3 — full per-student recalculation (slowest; only for date-filtered or studledger mode)
+    const schoolInfo = await getSchoolInfo(db);
+    const balClassId = await getBalForwardClassId(db);
+
+    const students = await fetchStudents(db, summaryFilters);
 
     const bySchoolYear = await buildSyComparison(db, {
-      programId: programId ? Number(programId) : null,
-      levelId: levelId ? Number(levelId) : null,
+      programId: summaryFilters.programId,
+      levelId: summaryFilters.levelId,
       semid,
       schoolInfo,
       balClassId,
@@ -1631,9 +1803,7 @@ export const getAccountReceivableSummary = async (req, res) => {
       return res.status(200).json({
         status: 'success',
         data: {
-          summary: {
-            ...emptyReceivableSummary(),
-          },
+          summary: { ...emptyReceivableSummary() },
           byProgram: [],
           byGradeLevel: [],
           balanceTiers: [],
@@ -1642,23 +1812,13 @@ export const getAccountReceivableSummary = async (req, res) => {
         },
       });
     }
-    const studentsWithTotals = [];
 
+    const studentsWithTotals = [];
     for (const student of students) {
       const totals = await calculateStudentTotals(
-        db,
-        student,
-        syid,
-        semid,
-        schoolInfo,
-        balClassId,
-        useStudledger,
-        dateRange
+        db, student, syid, semid, schoolInfo, balClassId, useStudledger, dateRange
       );
-      studentsWithTotals.push({
-        ...student,
-        ...totals,
-      });
+      studentsWithTotals.push({ ...student, ...totals });
     }
 
     const summaryData = buildSummary(studentsWithTotals);
