@@ -1005,6 +1005,63 @@ const fetchAllStudentTransactionRows = async (db, filters) => {
 };
 
 const fetchStudentTransactionSummaryTotals = async (db, filters) => {
+  const useDirectTotals = !filters?.programId && !filters?.levelId && !filters?.search;
+
+  if (useDirectTotals) {
+    const params = [];
+    const where = [];
+
+    if (filters?.syid) {
+      where.push('syid = ?');
+      params.push(filters.syid);
+    }
+
+    if (filters?.semid) {
+      where.push('semid = ?');
+      params.push(filters.semid);
+    }
+
+    const [rows] = await db.execute(
+      `
+        SELECT
+          COALESCE(SUM(total_payables), 0) as total_assessment,
+          COALESCE(SUM(total_payment), 0) as total_payment,
+          COALESCE(SUM(total_payables), 0) as total_receivable,
+          COALESCE(SUM(CASE WHEN total_balance > 0 THEN total_balance ELSE 0 END), 0) as total_balance,
+          COALESCE(SUM(total_overpayment), 0) as total_overpayment,
+          COUNT(*) as total_students,
+          COALESCE(SUM(CASE WHEN total_balance > 0 THEN 1 ELSE 0 END), 0) as students_with_balance,
+          COALESCE(SUM(CASE WHEN total_overpayment > 0 THEN 1 ELSE 0 END), 0) as overpaid_count
+        FROM student_transactions
+        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      `,
+      params
+    );
+
+    const row = rows[0] || {};
+    const totalReceivable = toNumber(row.total_receivable);
+    const totalBalance = toNumber(row.total_balance);
+    const studentsWithBalance = toNumber(row.students_with_balance);
+
+    return {
+      summary: {
+        total_assessment: Number(toNumber(row.total_assessment).toFixed(2)),
+        total_discount: 0,
+        total_payment: Number(toNumber(row.total_payment).toFixed(2)),
+        total_receivable: Number(totalReceivable.toFixed(2)),
+        total_balance: Number(totalBalance.toFixed(2)),
+        total_students: toNumber(row.total_students),
+        students_with_balance: studentsWithBalance,
+        average_balance:
+          studentsWithBalance > 0
+            ? Number((totalBalance / studentsWithBalance).toFixed(2))
+            : 0,
+        total_overpayment: Number(toNumber(row.total_overpayment).toFixed(2)),
+        overpaid_count: toNumber(row.overpaid_count),
+      },
+    };
+  }
+
   const queryParts = buildStudentTransactionQueryParts(filters);
   const [rows] = await db.execute(
     `

@@ -67,6 +67,7 @@ export default function AccountReceivables() {
   const [semesters, setSemesters] = useState([]);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [listLoading, setListLoading] = useState(false);
+  const [detailsLoaded, setDetailsLoaded] = useState(isFinanceV1);
 
   const [selectedSy, setSelectedSy] = useState('');
   const [selectedSem, setSelectedSem] = useState('');
@@ -103,7 +104,11 @@ export default function AccountReceivables() {
 
     debounceRef.current = setTimeout(() => {
       fetchReceivablesSummary();
-      fetchReceivablesList();
+      if (isFinanceV1 || detailsLoaded) {
+        fetchReceivablesList();
+      } else {
+        setReceivables([]);
+      }
     }, 350);
 
     return () => {
@@ -356,6 +361,9 @@ export default function AccountReceivables() {
       const result = await response.json();
       if (response.ok && result.status === 'success') {
         setReceivables(result.data || []);
+        if (!isFinanceV1) {
+          setDetailsLoaded(true);
+        }
       } else {
         toast.error(result.message || 'Failed to fetch receivables list');
       }
@@ -372,6 +380,11 @@ export default function AccountReceivables() {
   };
 
   const handleExport = () => {
+    if (!isFinanceV1 && !detailsLoaded) {
+      toast.error('Load details before exporting');
+      return;
+    }
+
     if (!receivables || receivables.length === 0) {
       toast.error('No data to export');
       return;
@@ -409,7 +422,9 @@ export default function AccountReceivables() {
     }
 
     fetchReceivablesSummary();
-    fetchReceivablesList();
+    if (isFinanceV1 || detailsLoaded) {
+      fetchReceivablesList();
+    }
   };
 
   const handleRefresh = () => {
@@ -421,6 +436,12 @@ export default function AccountReceivables() {
       return;
     }
     fetchReceivablesSummary();
+    if (detailsLoaded) {
+      fetchReceivablesList();
+    }
+  };
+
+  const handleLoadDetails = () => {
     fetchReceivablesList();
   };
 
@@ -641,9 +662,19 @@ export default function AccountReceivables() {
               </div>
 
               <div className="flex items-center justify-end gap-2">
-                <Button variant="outline" size="sm" onClick={handleExport} className="h-9">
-                  <Download className="h-4 w-4 mr-2" />
-                  Export
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={detailsLoaded ? handleExport : handleLoadDetails}
+                  className="h-9"
+                  disabled={listLoading}
+                >
+                  {detailsLoaded ? (
+                    <Download className="h-4 w-4 mr-2" />
+                  ) : (
+                    <RefreshCcw className={`h-4 w-4 mr-2 ${listLoading ? 'animate-spin' : ''}`} />
+                  )}
+                  {detailsLoaded ? 'Export' : 'Load Details'}
                 </Button>
               </div>
             </div>
@@ -765,11 +796,32 @@ export default function AccountReceivables() {
 
       <Card data-watermark="TABLE">
         <CardContent className="pt-6">
-          <ReceivablesTable
-            data={receivables}
-            loading={listLoading}
-            isFinanceV1={isFinanceV1}
-          />
+          {!isFinanceV1 && !detailsLoaded ? (
+            <div className="flex min-h-[180px] items-center justify-center">
+              <div className="text-center">
+                <div className="text-sm font-medium">Student details are not loaded</div>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  The totals above are loaded directly from student transactions.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleLoadDetails}
+                  disabled={listLoading}
+                  className="mt-4"
+                >
+                  <RefreshCcw className={`h-4 w-4 mr-2 ${listLoading ? 'animate-spin' : ''}`} />
+                  Load Details
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <ReceivablesTable
+              data={receivables}
+              loading={listLoading}
+              isFinanceV1={isFinanceV1}
+            />
+          )}
         </CardContent>
       </Card>
     </div>
