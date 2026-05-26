@@ -164,9 +164,9 @@ function TransactionsTab({ schoolDbConfig, syid, semid, token }) {
           <RefreshCcw className="h-6 w-6 animate-spin text-primary" />
         </div>
       ) : (
-        <div className="rounded-md border overflow-x-auto">
+        <div className="rounded-md border overflow-auto max-h-[calc(100vh-320px)]">
           <table className="w-full text-sm">
-            <thead className="border-b bg-muted/40">
+            <thead className="sticky top-0 z-10 border-b bg-muted/40">
               <tr className="text-xs text-muted-foreground">
                 <th className="px-3 py-2 text-left font-medium">Student</th>
                 <th className="px-3 py-2 text-left font-medium">Type</th>

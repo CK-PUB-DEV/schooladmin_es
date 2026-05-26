@@ -25,6 +25,8 @@ const getSchoolPool = (schoolDbConfig) => {
       waitForConnections: true,
       connectionLimit: 5,
       queueLimit: 20,
+      enableKeepAlive: true,
+      keepAliveInitialDelay: 30000,
     });
     _poolCache.set(cacheKey, pool);
   }
@@ -863,7 +865,7 @@ const buildStudentTransactionQueryParts = ({ syid, semid, programId, levelId, se
   }
 
   if (semid) {
-    where.push('st.semid = ?');
+    where.push('(st.semid = ? OR st.semid = 0)');
     params.push(semid);
   }
 
@@ -1830,9 +1832,9 @@ export const getAccountReceivableSummary = async (req, res) => {
 
     const params = [syid];
     const where  = ['st.syid = ?'];
-    if (semid)    { where.push('st.semid = ?');     params.push(semid); }
-    if (levelId)  { where.push('st.levelid = ?');   params.push(Number(levelId)); }
-    if (programId){ where.push('gl.acadprogid = ?');params.push(Number(programId)); }
+    if (semid)    { where.push('(st.semid = ? OR st.semid = 0)'); params.push(semid); }
+    if (levelId)  { where.push('st.levelid = ?');                 params.push(Number(levelId)); }
+    if (programId){ where.push('gl.acadprogid = ?');              params.push(Number(programId)); }
 
     const [rows] = await pool.execute(
       `SELECT
@@ -1912,7 +1914,7 @@ export const getAccountReceivableTransactions = async (req, res) => {
 
     const params = [syid];
     const where  = ['sl.syid = ?'];
-    if (semid)  { where.push('sl.semid = ?');  params.push(semid); }
+    if (semid)  { where.push('(sl.semid = ? OR sl.semid = 0)');  params.push(semid); }
     if (studid) { where.push('sl.studid = ?'); params.push(studid); }
     if (search) {
       where.push(`(si.sid LIKE ? OR CONCAT_WS(' ', si.lastname, si.firstname, si.middlename) LIKE ?)`);
@@ -1924,33 +1926,33 @@ export const getAccountReceivableTransactions = async (req, res) => {
     const safePerPage = Math.min(500, Math.max(1, Number(perPage) || 100));
     const offset      = (safePage - 1) * safePerPage;
 
-    const [[countRows], [rows]] = await Promise.all([
-      pool.execute(
-        `SELECT COUNT(*) AS total FROM student_ledger sl JOIN studinfo si ON si.id = sl.studid ${whereStr}`,
-        params
-      ),
-      pool.execute(
-        `SELECT
-           sl.id,
-           sl.studid,
-           sl.type,
-           sl.description,
-           sl.amount,
-           sl.updated_payables,
-           sl.updated_payment,
-           sl.updated_balance,
-           sl.updated_overpayment,
-           sl.created_at,
-           si.sid,
-           CONCAT_WS(' ', si.lastname, si.firstname, si.middlename) AS full_name
-         FROM student_ledger sl
-         JOIN studinfo si ON si.id = sl.studid
-         ${whereStr}
-         ORDER BY sl.id DESC
-         LIMIT ${safePerPage} OFFSET ${offset}`,
-        params
-      ),
-    ]);
+    // Run sequentially — parallel heavy queries on student_ledger can ECONNRESET remote servers
+    const [rows] = await pool.execute(
+      `SELECT
+         sl.id,
+         sl.studid,
+         sl.type,
+         sl.description,
+         sl.amount,
+         sl.updated_payables,
+         sl.updated_payment,
+         sl.updated_balance,
+         sl.updated_overpayment,
+         sl.created_at,
+         si.sid,
+         CONCAT_WS(' ', si.lastname, si.firstname, si.middlename) AS full_name
+       FROM student_ledger sl
+       JOIN studinfo si ON si.id = sl.studid
+       ${whereStr}
+       ORDER BY sl.id DESC
+       LIMIT ${safePerPage} OFFSET ${offset}`,
+      params
+    );
+
+    const [countRows] = await pool.execute(
+      `SELECT COUNT(*) AS total FROM student_ledger sl JOIN studinfo si ON si.id = sl.studid ${whereStr}`,
+      params
+    );
 
     const total = toNumber(countRows[0]?.total);
     return res.status(200).json({
