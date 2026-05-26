@@ -882,7 +882,7 @@ const buildStudentTransactionQueryParts = ({ syid, semid, programId, levelId, se
   }
 
   if (semid) {
-    where.push('(st.semid = ? OR st.semid = 0)');
+    where.push('st.semid IN (0, ?)');
     params.push(semid);
   }
 
@@ -1221,7 +1221,7 @@ const buildStudentLedgerQueryParts = ({ syid, semid, programId, levelId, search 
   const innerCond = ['syid = ?'];
   const innerParams = [syid];
   if (semid) {
-    innerCond.push('semid = ?');
+    innerCond.push('semid IN (0, ?)');
     innerParams.push(semid);
   }
 
@@ -1856,7 +1856,7 @@ export const getAccountReceivableSummary = async (req, res) => {
 
     const params = [syid];
     const where  = ['st.syid = ?'];
-    if (semid)    { where.push('(st.semid = ? OR st.semid = 0)'); params.push(semid); }
+    if (semid)    { where.push('st.semid IN (0, ?)'); params.push(semid); }
     if (levelId)  { where.push('st.levelid = ?');                 params.push(Number(levelId)); }
     if (programId){ where.push('gl.acadprogid = ?');              params.push(Number(programId)); }
 
@@ -1938,7 +1938,7 @@ export const getAccountReceivableTransactions = async (req, res) => {
 
     const params = [syid];
     const where  = ['sl.syid = ?'];
-    if (semid)  { where.push('(sl.semid = ? OR sl.semid = 0)');  params.push(semid); }
+    if (semid)  { where.push('sl.semid IN (0, ?)');  params.push(semid); }
     if (studid) { where.push('sl.studid = ?'); params.push(studid); }
     if (search) {
       where.push(`(si.sid LIKE ? OR CONCAT_WS(' ', si.lastname, si.firstname, si.middlename) LIKE ?)`);
