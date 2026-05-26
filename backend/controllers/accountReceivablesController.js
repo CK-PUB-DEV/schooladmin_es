@@ -1004,84 +1004,142 @@ const fetchAllStudentTransactionRows = async (db, filters) => {
   return rows.map(mapStudentTransactionRow);
 };
 
-const fetchStudentTransactionSummaryTotals = async (db, filters) => {
-  const useDirectTotals = !filters?.programId && !filters?.levelId && !filters?.search;
+/**
+ * Full summary from student_transactions: main totals + byProgram + byGradeLevel + balanceTiers.
+ * All four aggregation queries run in parallel for maximum throughput.
+ */
+const fetchStudentTransactionFullSummary = async (db, { syid, semid, programId, levelId, search }) => {
+  const { from, where, params } = buildStudentTransactionQueryParts({
+    syid,
+    semid,
+    programId,
+    levelId,
+    search,
+  });
 
-  if (useDirectTotals) {
-    const params = [];
-    const where = [];
-
-    if (filters?.syid) {
-      where.push('syid = ?');
-      params.push(filters.syid);
-    }
-
-    if (filters?.semid) {
-      where.push('semid = ?');
-      params.push(filters.semid);
-    }
-
-    const [rows] = await db.execute(
-      `
-        SELECT
-          COALESCE(SUM(total_payables), 0) as total_assessment,
-          COALESCE(SUM(total_payment), 0) as total_payment,
-          COALESCE(SUM(total_payables), 0) as total_receivable,
-          COALESCE(SUM(CASE WHEN total_balance > 0 THEN total_balance ELSE 0 END), 0) as total_balance,
-          COALESCE(SUM(total_overpayment), 0) as total_overpayment,
-          COUNT(*) as total_students,
-          COALESCE(SUM(CASE WHEN total_balance > 0 THEN 1 ELSE 0 END), 0) as students_with_balance,
-          COALESCE(SUM(CASE WHEN total_overpayment > 0 THEN 1 ELSE 0 END), 0) as overpaid_count
-        FROM student_transactions
-        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-      `,
+  const [[summaryRows], [programRows], [levelRows], [tierRows]] = await Promise.all([
+    db.execute(
+      `SELECT
+         COALESCE(SUM(st.total_payables), 0)                                               AS total_assessment,
+         COALESCE(SUM(st.total_payment), 0)                                                AS total_payment,
+         COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN st.total_balance ELSE 0 END), 0) AS total_balance,
+         COALESCE(SUM(st.total_overpayment), 0)                                            AS total_overpayment,
+         COUNT(*)                                                                           AS total_students,
+         COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN 1 ELSE 0 END), 0)               AS students_with_balance,
+         COALESCE(SUM(CASE WHEN st.total_overpayment > 0 THEN 1 ELSE 0 END), 0)           AS overpaid_count
+       ${from} ${where}`,
       params
-    );
+    ),
+    db.execute(
+      `SELECT
+         ap.id                                                                              AS program_id,
+         COALESCE(ap.progname, 'Unknown')                                                  AS program_name,
+         COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN st.total_balance ELSE 0 END), 0) AS total_balance,
+         COUNT(*)                                                                           AS student_count
+       ${from} ${where}
+       GROUP BY ap.id, ap.progname
+       ORDER BY total_balance DESC`,
+      params
+    ),
+    db.execute(
+      `SELECT
+         gl.id                                                                              AS level_id,
+         COALESCE(gl.levelname, 'Unknown')                                                 AS level_name,
+         COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN st.total_balance ELSE 0 END), 0) AS total_balance,
+         COUNT(*)                                                                           AS student_count
+       ${from} ${where}
+       GROUP BY gl.id, gl.levelname
+       ORDER BY total_balance DESC`,
+      params
+    ),
+    db.execute(
+      `SELECT
+         COALESCE(SUM(CASE WHEN st.total_balance > 0    AND st.total_balance < 1000  THEN 1 ELSE 0 END), 0)              AS t1_count,
+         COALESCE(SUM(CASE WHEN st.total_balance > 0    AND st.total_balance < 1000  THEN st.total_balance ELSE 0 END), 0) AS t1_total,
+         COALESCE(SUM(CASE WHEN st.total_balance >= 1000  AND st.total_balance < 5000  THEN 1 ELSE 0 END), 0)              AS t2_count,
+         COALESCE(SUM(CASE WHEN st.total_balance >= 1000  AND st.total_balance < 5000  THEN st.total_balance ELSE 0 END), 0) AS t2_total,
+         COALESCE(SUM(CASE WHEN st.total_balance >= 5000  AND st.total_balance < 20000 THEN 1 ELSE 0 END), 0)              AS t3_count,
+         COALESCE(SUM(CASE WHEN st.total_balance >= 5000  AND st.total_balance < 20000 THEN st.total_balance ELSE 0 END), 0) AS t3_total,
+         COALESCE(SUM(CASE WHEN st.total_balance >= 20000                              THEN 1 ELSE 0 END), 0)              AS t4_count,
+         COALESCE(SUM(CASE WHEN st.total_balance >= 20000                              THEN st.total_balance ELSE 0 END), 0) AS t4_total
+       ${from} ${where}`,
+      params
+    ),
+  ]);
 
-    const row = rows[0] || {};
-    const totalReceivable = toNumber(row.total_receivable);
-    const totalBalance = toNumber(row.total_balance);
-    const studentsWithBalance = toNumber(row.students_with_balance);
+  const row = summaryRows[0] || {};
+  const totalBalance = toNumber(row.total_balance);
+  const studentsWithBalance = toNumber(row.students_with_balance);
+  const t = tierRows[0] || {};
 
-    return {
-      summary: {
-        total_assessment: Number(toNumber(row.total_assessment).toFixed(2)),
-        total_discount: 0,
-        total_payment: Number(toNumber(row.total_payment).toFixed(2)),
-        total_receivable: Number(totalReceivable.toFixed(2)),
-        total_balance: Number(totalBalance.toFixed(2)),
-        total_students: toNumber(row.total_students),
-        students_with_balance: studentsWithBalance,
-        average_balance:
-          studentsWithBalance > 0
-            ? Number((totalBalance / studentsWithBalance).toFixed(2))
-            : 0,
-        total_overpayment: Number(toNumber(row.total_overpayment).toFixed(2)),
-        overpaid_count: toNumber(row.overpaid_count),
-      },
-    };
-  }
+  const mapAvg = (total, count) =>
+    count > 0 ? Number((toNumber(total) / count).toFixed(2)) : 0;
 
-  const queryParts = buildStudentTransactionQueryParts(filters);
+  return {
+    summary: {
+      total_assessment: Number(toNumber(row.total_assessment).toFixed(2)),
+      total_discount: 0,
+      total_payment: Number(toNumber(row.total_payment).toFixed(2)),
+      total_receivable: Number(totalBalance.toFixed(2)),
+      total_balance: Number(totalBalance.toFixed(2)),
+      total_students: toNumber(row.total_students),
+      students_with_balance: studentsWithBalance,
+      average_balance: studentsWithBalance > 0
+        ? Number((totalBalance / studentsWithBalance).toFixed(2))
+        : 0,
+      total_overpayment: Number(toNumber(row.total_overpayment).toFixed(2)),
+      overpaid_count: toNumber(row.overpaid_count),
+    },
+    byProgram: programRows.map((r) => ({
+      program_id: r.program_id || null,
+      program_name: r.program_name || 'Unknown Program',
+      total_balance: Number(toNumber(r.total_balance).toFixed(2)),
+      student_count: toNumber(r.student_count),
+      avg_balance: mapAvg(r.total_balance, toNumber(r.student_count)),
+    })),
+    byGradeLevel: levelRows.map((r) => ({
+      level_id: r.level_id || null,
+      level_name: r.level_name || 'Unknown Level',
+      total_balance: Number(toNumber(r.total_balance).toFixed(2)),
+      student_count: toNumber(r.student_count),
+      avg_balance: mapAvg(r.total_balance, toNumber(r.student_count)),
+    })),
+    balanceTiers: [
+      { label: '0 - 1k',  min: 0,     max: 1000,     count: toNumber(t.t1_count), total_balance: Number(toNumber(t.t1_total).toFixed(2)) },
+      { label: '1k - 5k', min: 1000,  max: 5000,     count: toNumber(t.t2_count), total_balance: Number(toNumber(t.t2_total).toFixed(2)) },
+      { label: '5k - 20k',min: 5000,  max: 20000,    count: toNumber(t.t3_count), total_balance: Number(toNumber(t.t3_total).toFixed(2)) },
+      { label: '20k+',    min: 20000, max: Infinity,  count: toNumber(t.t4_count), total_balance: Number(toNumber(t.t4_total).toFixed(2)) },
+    ],
+  };
+};
+
+/**
+ * Lightweight summary-only totals (no breakdowns).
+ * Used by getAccountReceivableSummaryTotals helper.
+ */
+const fetchStudentTransactionSummaryTotals = async (db, { syid, semid, programId, levelId, search }) => {
+  const { from, where, params } = buildStudentTransactionQueryParts({
+    syid,
+    semid,
+    programId,
+    levelId,
+    search,
+  });
+
   const [rows] = await db.execute(
-    `
-      SELECT
-        COALESCE(SUM(st.total_payables), 0) as total_assessment,
-        COALESCE(SUM(st.total_payment), 0) as total_payment,
-        COALESCE(SUM(st.total_payables), 0) as total_receivable,
-        COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN st.total_balance ELSE 0 END), 0) as total_balance,
-        COALESCE(SUM(st.total_overpayment), 0) as total_overpayment,
-        COUNT(*) as total_students,
-        COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN 1 ELSE 0 END), 0) as students_with_balance,
-        COALESCE(SUM(CASE WHEN st.total_overpayment > 0 THEN 1 ELSE 0 END), 0) as overpaid_count
-      ${queryParts.from}
-      ${queryParts.where}
-    `,
-    queryParts.params
+    `SELECT
+       COALESCE(SUM(st.total_payables), 0)                                               AS total_assessment,
+       COALESCE(SUM(st.total_payment), 0)                                                AS total_payment,
+       COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN st.total_balance ELSE 0 END), 0) AS total_balance,
+       COALESCE(SUM(st.total_overpayment), 0)                                            AS total_overpayment,
+       COUNT(*)                                                                           AS total_students,
+       COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN 1 ELSE 0 END), 0)               AS students_with_balance,
+       COALESCE(SUM(CASE WHEN st.total_overpayment > 0 THEN 1 ELSE 0 END), 0)           AS overpaid_count
+     ${from} ${where}`,
+    params
   );
 
   const row = rows[0] || {};
-  const totalReceivable = toNumber(row.total_receivable);
   const totalBalance = toNumber(row.total_balance);
   const studentsWithBalance = toNumber(row.students_with_balance);
 
@@ -1090,53 +1148,146 @@ const fetchStudentTransactionSummaryTotals = async (db, filters) => {
       total_assessment: Number(toNumber(row.total_assessment).toFixed(2)),
       total_discount: 0,
       total_payment: Number(toNumber(row.total_payment).toFixed(2)),
-      total_receivable: Number(totalReceivable.toFixed(2)),
+      total_receivable: Number(totalBalance.toFixed(2)),
       total_balance: Number(totalBalance.toFixed(2)),
       total_students: toNumber(row.total_students),
       students_with_balance: studentsWithBalance,
-      average_balance:
-        studentsWithBalance > 0
-          ? Number((totalBalance / studentsWithBalance).toFixed(2))
-          : 0,
+      average_balance: studentsWithBalance > 0
+        ? Number((totalBalance / studentsWithBalance).toFixed(2))
+        : 0,
       total_overpayment: Number(toNumber(row.total_overpayment).toFixed(2)),
       overpaid_count: toNumber(row.overpaid_count),
     },
   };
 };
 
-const buildSyComparisonFromStudentTransactions = async (db, { programId, levelId, semid }) => {
-  const schoolYears = await getSchoolYears(db, 4);
-  const comparison = [];
-
-  for (const sy of schoolYears) {
-    const queryParts = buildStudentTransactionQueryParts({
-      syid: sy.id,
-      semid,
-      programId,
-      levelId,
-      search: null,
-    });
-
-    const [rows] = await db.execute(
-      `
-        SELECT
-          COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN st.total_balance ELSE 0 END), 0) as total_receivable,
-          COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN 1 ELSE 0 END), 0) as students_with_balance
-        ${queryParts.from}
-        ${queryParts.where}
-      `,
-      queryParts.params
-    );
-
-    comparison.push({
-      syid: sy.id,
-      sydesc: sy.sydesc,
-      total_receivable: Number(toNumber(rows[0]?.total_receivable).toFixed(2)),
-      students_with_balance: toNumber(rows[0]?.students_with_balance),
-    });
+/**
+ * Fallback when student_transactions table is absent.
+ * Gets the latest running totals per student from student_ledger (last entry by id),
+ * which is much faster than per-student fee recalculation.
+ */
+const fetchStudentLedgerBalances = async (db, { syid, semid, programId, levelId, search, page = 1, perPage = 200 }) => {
+  const innerWhere = ['sl_inner.deleted = 0', 'sl_inner.syid = ?'];
+  const innerParams = [syid];
+  if (semid) {
+    innerWhere.push('sl_inner.semid = ?');
+    innerParams.push(semid);
   }
 
-  return comparison;
+  const outerWhere = ['si.deleted = 0'];
+  const outerParams = [];
+  if (programId) {
+    outerWhere.push('gl.acadprogid = ?');
+    outerParams.push(programId);
+  }
+  if (levelId) {
+    outerWhere.push('si.levelid = ?');
+    outerParams.push(levelId);
+  }
+  if (search) {
+    outerWhere.push(`(
+      si.sid LIKE ?
+      OR CONCAT_WS(' ', si.lastname, si.firstname, si.middlename) LIKE ?
+      OR CONCAT_WS(' ', si.firstname, si.middlename, si.lastname) LIKE ?
+    )`);
+    const term = `%${search}%`;
+    outerParams.push(term, term, term);
+  }
+
+  const allParams = [...innerParams, ...innerParams, ...outerParams];
+
+  const baseFrom = `
+    FROM (
+      SELECT sl.studid,
+             sl.updated_payables  AS total_payables,
+             sl.updated_payment   AS total_payment,
+             sl.updated_balance   AS total_balance,
+             sl.updated_overpayment AS total_overpayment
+      FROM student_ledger sl
+      INNER JOIN (
+        SELECT studid, MAX(id) AS max_id
+        FROM student_ledger sl_inner
+        WHERE ${innerWhere.join(' AND ')}
+        GROUP BY studid
+      ) latest ON sl.id = latest.max_id
+    ) sl_data
+    JOIN studinfo si ON si.id = sl_data.studid
+    LEFT JOIN gradelevel gl ON gl.id = si.levelid
+    LEFT JOIN academicprogram ap ON ap.id = gl.acadprogid
+    WHERE ${outerWhere.join(' AND ')}
+  `;
+
+  const [[countRows], [dataRows]] = await Promise.all([
+    db.execute(`SELECT COUNT(*) AS total ${baseFrom}`, allParams),
+    db.execute(
+      `SELECT
+         sl_data.studid,
+         sl_data.total_payables,
+         sl_data.total_payment,
+         sl_data.total_balance,
+         sl_data.total_overpayment,
+         si.sid,
+         si.firstname,
+         si.middlename,
+         si.lastname,
+         CONCAT_WS(' ', si.lastname, si.firstname, si.middlename) AS full_name,
+         si.levelid,
+         si.courseid,
+         si.strandid,
+         si.feesid,
+         gl.levelname  AS level_name,
+         gl.acadprogid AS acadprog_id,
+         ap.progname   AS program_name
+       ${baseFrom}
+       ORDER BY sl_data.total_balance DESC, si.lastname, si.firstname
+       ${perPage > 0 ? `LIMIT ${perPage} OFFSET ${(Math.max(1, page) - 1) * perPage}` : ''}`,
+      allParams
+    ),
+  ]);
+
+  const total = toNumber(countRows[0]?.total);
+  return {
+    rows: dataRows.map((row) => mapStudentTransactionRow({
+      ...row,
+      transaction_id: null,
+      last_calculated_at: null,
+    })),
+    total,
+    page: Math.max(1, page),
+    perPage,
+  };
+};
+
+const buildSyComparisonFromStudentTransactions = async (db, { programId, levelId, semid }) => {
+  const schoolYears = await getSchoolYears(db, 4);
+
+  return Promise.all(
+    schoolYears.map(async (sy) => {
+      const queryParts = buildStudentTransactionQueryParts({
+        syid: sy.id,
+        semid,
+        programId,
+        levelId,
+        search: null,
+      });
+
+      const [rows] = await db.execute(
+        `SELECT
+           COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN st.total_balance ELSE 0 END), 0) as total_receivable,
+           COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN 1 ELSE 0 END), 0) as students_with_balance
+         ${queryParts.from}
+         ${queryParts.where}`,
+        queryParts.params
+      );
+
+      return {
+        syid: sy.id,
+        sydesc: sy.sydesc,
+        total_receivable: Number(toNumber(rows[0]?.total_receivable).toFixed(2)),
+        students_with_balance: toNumber(rows[0]?.students_with_balance),
+      };
+    })
+  );
 };
 
 const buildSyComparison = async (db, options) => {
@@ -1261,19 +1412,20 @@ export const getAccountReceivableList = async (req, res) => {
     const db = await getSchoolConnection(schoolDbConfig);
 
     if (shouldUseStudentTransactions({ dateRange, useStudledger })) {
+      const listFilters = {
+        syid,
+        semid,
+        programId: programId ? Number(programId) : null,
+        levelId: levelId ? Number(levelId) : null,
+        search: search || null,
+        page,
+        perPage,
+      };
+
+      // Primary: student_transactions (pre-computed, fastest)
       try {
-        const precomputed = await fetchStudentTransactionRows(db, {
-          syid,
-          semid,
-          programId: programId ? Number(programId) : null,
-          levelId: levelId ? Number(levelId) : null,
-          search: search || null,
-          page,
-          perPage,
-        });
-
+        const precomputed = await fetchStudentTransactionRows(db, listFilters);
         await db.end();
-
         return res.status(200).json({
           status: 'success',
           data: precomputed.rows,
@@ -1281,18 +1433,39 @@ export const getAccountReceivableList = async (req, res) => {
             total: precomputed.total,
             page: precomputed.page,
             per_page: precomputed.perPage,
-            pages:
-              precomputed.perPage > 0
-                ? Math.ceil(precomputed.total / Math.max(1, precomputed.perPage))
-                : 1,
+            pages: precomputed.perPage > 0
+              ? Math.ceil(precomputed.total / Math.max(1, precomputed.perPage))
+              : 1,
             appliedDateRange: dateRange,
             source: 'student_transactions',
           },
         });
-      } catch (error) {
-        if (!isMissingStudentTransactionsTable(error)) {
-          console.warn('Falling back to calculated receivables list:', error.message);
+      } catch (txError) {
+        if (!isMissingStudentTransactionsTable(txError)) {
+          console.warn('student_transactions error:', txError.message);
         }
+      }
+
+      // Fallback: student_ledger running totals (fast, no per-student calculation)
+      try {
+        const ledger = await fetchStudentLedgerBalances(db, listFilters);
+        await db.end();
+        return res.status(200).json({
+          status: 'success',
+          data: ledger.rows,
+          meta: {
+            total: ledger.total,
+            page: ledger.page,
+            per_page: ledger.perPage,
+            pages: ledger.perPage > 0
+              ? Math.ceil(ledger.total / Math.max(1, ledger.perPage))
+              : 1,
+            appliedDateRange: dateRange,
+            source: 'student_ledger',
+          },
+        });
+      } catch (ledgerError) {
+        // student_ledger also absent — fall through to full calculation
       }
     }
 
@@ -1398,25 +1571,32 @@ export const getAccountReceivableSummary = async (req, res) => {
 
     if (shouldUseStudentTransactions({ dateRange, useStudledger })) {
       try {
-        const summaryData = await fetchStudentTransactionSummaryTotals(db, {
+        const filters = {
           syid,
           semid,
           programId: programId ? Number(programId) : null,
           levelId: levelId ? Number(levelId) : null,
           search: search || null,
-        });
-        summaryData.byProgram = [];
-        summaryData.byGradeLevel = [];
-        summaryData.balanceTiers = [];
-        summaryData.bySchoolYear = [];
-        summaryData.appliedDateRange = dateRange;
-        summaryData.source = 'student_transactions';
+        };
+        const [summaryData, bySchoolYear] = await Promise.all([
+          fetchStudentTransactionFullSummary(db, filters),
+          buildSyComparisonFromStudentTransactions(db, {
+            programId: filters.programId,
+            levelId: filters.levelId,
+            semid,
+          }),
+        ]);
 
         await db.end();
 
         return res.status(200).json({
           status: 'success',
-          data: summaryData,
+          data: {
+            ...summaryData,
+            bySchoolYear,
+            appliedDateRange: dateRange,
+            source: 'student_transactions',
+          },
         });
       } catch (error) {
         if (!isMissingStudentTransactionsTable(error)) {
