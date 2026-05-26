@@ -1854,64 +1854,54 @@ export const getAccountReceivableSummary = async (req, res) => {
 
     const pool = getSchoolPool(schoolDbConfig);
 
+    // TEST: bare minimum query — no JOINs, no GROUP BY
+    // If this is fast on server → query complexity is the issue
+    // If this is also slow → it's a connection/network issue unrelated to query
     const params = [syid];
-    const where  = ['st.syid = ?'];
-    if (semid)    { where.push('st.semid IN (0, ?)'); params.push(semid); }
-    if (levelId)  { where.push('st.levelid = ?');                 params.push(Number(levelId)); }
-    if (programId){ where.push('gl.acadprogid = ?');              params.push(Number(programId)); }
+    const where  = ['syid = ?'];
+    if (semid) { where.push('semid IN (0, ?)'); params.push(semid); }
 
-    const [rows] = await pool.execute(
-      `SELECT
-         gl.id                                                                              AS level_id,
-         gl.levelname,
-         gl.acadprogid                                                                      AS acadprog_id,
-         ap.progname                                                                        AS program_name,
-         COALESCE(SUM(st.total_payables), 0)                                               AS total_payables,
-         COALESCE(SUM(st.total_payment), 0)                                                AS total_payment,
-         COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN st.total_balance ELSE 0 END), 0) AS total_balance,
-         COALESCE(SUM(st.total_overpayment), 0)                                            AS total_overpayment,
-         COUNT(*)                                                                           AS student_count,
-         SUM(CASE WHEN st.total_balance > 0 THEN 1 ELSE 0 END)                            AS students_with_balance
-       FROM student_transactions st
-       JOIN gradelevel gl ON gl.id = st.levelid
-       JOIN academicprogram ap ON ap.id = gl.acadprogid
-       WHERE ${where.join(' AND ')}
-       GROUP BY gl.id, gl.levelname, gl.acadprogid, ap.progname
-       ORDER BY ap.progname, gl.levelname`,
+    const [[testRow]] = await pool.execute(
+      `SELECT COUNT(*) AS student_count, COALESCE(SUM(total_payables), 0) AS total_payables
+       FROM student_transactions
+       WHERE ${where.join(' AND ')}`,
       params
     );
 
-    // Aggregate grand totals from per-level rows (no second query needed)
-    let tp = 0, tpay = 0, tb = 0, tov = 0, sc = 0, swb = 0;
-    for (const r of rows) {
-      tp   += toNumber(r.total_payables);
-      tpay += toNumber(r.total_payment);
-      tb   += toNumber(r.total_balance);
-      tov  += toNumber(r.total_overpayment);
-      sc   += toNumber(r.student_count);
-      swb  += toNumber(r.students_with_balance);
-    }
-
     const responseData = {
-      total_payables:        +tp.toFixed(2),
-      total_payment:         +tpay.toFixed(2),
-      total_balance:         +tb.toFixed(2),
-      total_overpayment:     +tov.toFixed(2),
-      student_count:         sc,
-      students_with_balance: swb,
-      breakdown: rows.map((r) => ({
-        level_id:          r.level_id,
-        levelname:         r.levelname,
-        acadprog_id:       r.acadprog_id,
-        program_name:      r.program_name,
-        total_payables:    +toNumber(r.total_payables).toFixed(2),
-        total_payment:     +toNumber(r.total_payment).toFixed(2),
-        total_balance:     +toNumber(r.total_balance).toFixed(2),
-        total_overpayment: +toNumber(r.total_overpayment).toFixed(2),
-        student_count:     toNumber(r.student_count),
-      })),
-      source: 'student_transactions',
+      total_payables:        +toNumber(testRow?.total_payables).toFixed(2),
+      total_payment:         0,
+      total_balance:         0,
+      total_overpayment:     0,
+      student_count:         toNumber(testRow?.student_count),
+      students_with_balance: 0,
+      breakdown:             [],
+      source:                'student_transactions_test',
     };
+
+    /* FULL QUERY — commented out for server timing test
+    const fullParams = [syid];
+    const fullWhere  = ['st.syid = ?'];
+    if (semid)    { fullWhere.push('st.semid IN (0, ?)'); fullParams.push(semid); }
+    if (levelId)  { fullWhere.push('st.levelid = ?');     fullParams.push(Number(levelId)); }
+    if (programId){ fullWhere.push('gl.acadprogid = ?');  fullParams.push(Number(programId)); }
+    const [rows] = await pool.execute(
+      `SELECT gl.id AS level_id, gl.levelname, gl.acadprogid AS acadprog_id, ap.progname AS program_name,
+         COALESCE(SUM(st.total_payables), 0) AS total_payables,
+         COALESCE(SUM(st.total_payment), 0) AS total_payment,
+         COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN st.total_balance ELSE 0 END), 0) AS total_balance,
+         COALESCE(SUM(st.total_overpayment), 0) AS total_overpayment,
+         COUNT(*) AS student_count,
+         SUM(CASE WHEN st.total_balance > 0 THEN 1 ELSE 0 END) AS students_with_balance
+       FROM student_transactions st
+       JOIN gradelevel gl ON gl.id = st.levelid
+       JOIN academicprogram ap ON ap.id = gl.acadprogid
+       WHERE ${fullWhere.join(' AND ')}
+       GROUP BY gl.id, gl.levelname, gl.acadprogid, ap.progname
+       ORDER BY ap.progname, gl.levelname`,
+      fullParams
+    );
+    */
 
     _setCache(cacheKey, responseData);
     return res.status(200).json({ status: 'success', data: responseData });
