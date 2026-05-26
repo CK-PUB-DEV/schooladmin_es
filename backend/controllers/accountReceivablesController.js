@@ -4,6 +4,23 @@ import mysql from 'mysql2/promise';
 // so we pay the TCP handshake cost once, not on every request.
 const _poolCache = new Map();
 
+// Summary cache — avoids re-querying the remote DB on every filter change.
+// TTL: 5 minutes. Busted when the client sends { bustCache: true }.
+const _summaryCache = new Map();
+const SUMMARY_TTL_MS = 5 * 60 * 1000;
+
+const _summaryKey = (dbName, syid, semid, programId, levelId) =>
+  `${dbName}|${syid}|${semid ?? ''}|${programId ?? ''}|${levelId ?? ''}`;
+
+const _getCache = (key) => {
+  const entry = _summaryCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > SUMMARY_TTL_MS) { _summaryCache.delete(key); return null; }
+  return entry.data;
+};
+
+const _setCache = (key, data) => _summaryCache.set(key, { data, ts: Date.now() });
+
 const _resolvePort = (schoolDbConfig) => {
   const parsedPort = Number.parseInt(schoolDbConfig.db_port, 10);
   return Number.isNaN(parsedPort)
@@ -1822,10 +1839,17 @@ export const getAccountReceivableList = async (req, res) => {
  */
 export const getAccountReceivableSummary = async (req, res) => {
   try {
-    const { schoolDbConfig, syid, semid, programId, levelId } = req.body;
+    const { schoolDbConfig, syid, semid, programId, levelId, bustCache } = req.body;
 
     if (!schoolDbConfig || !syid) {
       return res.status(400).json({ status: 'error', message: 'schoolDbConfig and syid are required' });
+    }
+
+    // Return cached result if available and not explicitly busted
+    const cacheKey = _summaryKey(schoolDbConfig.db_name, syid, semid, programId, levelId);
+    if (!bustCache) {
+      const cached = _getCache(cacheKey);
+      if (cached) return res.status(200).json({ status: 'success', data: cached, cached: true });
     }
 
     const pool = getSchoolPool(schoolDbConfig);
@@ -1868,29 +1892,29 @@ export const getAccountReceivableSummary = async (req, res) => {
       swb  += toNumber(r.students_with_balance);
     }
 
-    return res.status(200).json({
-      status: 'success',
-      data: {
-        total_payables:        +tp.toFixed(2),
-        total_payment:         +tpay.toFixed(2),
-        total_balance:         +tb.toFixed(2),
-        total_overpayment:     +tov.toFixed(2),
-        student_count:         sc,
-        students_with_balance: swb,
-        breakdown: rows.map((r) => ({
-          level_id:          r.level_id,
-          levelname:         r.levelname,
-          acadprog_id:       r.acadprog_id,
-          program_name:      r.program_name,
-          total_payables:    +toNumber(r.total_payables).toFixed(2),
-          total_payment:     +toNumber(r.total_payment).toFixed(2),
-          total_balance:     +toNumber(r.total_balance).toFixed(2),
-          total_overpayment: +toNumber(r.total_overpayment).toFixed(2),
-          student_count:     toNumber(r.student_count),
-        })),
-        source: 'student_transactions',
-      },
-    });
+    const responseData = {
+      total_payables:        +tp.toFixed(2),
+      total_payment:         +tpay.toFixed(2),
+      total_balance:         +tb.toFixed(2),
+      total_overpayment:     +tov.toFixed(2),
+      student_count:         sc,
+      students_with_balance: swb,
+      breakdown: rows.map((r) => ({
+        level_id:          r.level_id,
+        levelname:         r.levelname,
+        acadprog_id:       r.acadprog_id,
+        program_name:      r.program_name,
+        total_payables:    +toNumber(r.total_payables).toFixed(2),
+        total_payment:     +toNumber(r.total_payment).toFixed(2),
+        total_balance:     +toNumber(r.total_balance).toFixed(2),
+        total_overpayment: +toNumber(r.total_overpayment).toFixed(2),
+        student_count:     toNumber(r.student_count),
+      })),
+      source: 'student_transactions',
+    };
+
+    _setCache(cacheKey, responseData);
+    return res.status(200).json({ status: 'success', data: responseData });
   } catch (error) {
     console.error('Error fetching account receivables summary:', error);
     res.status(500).json({ status: 'error', message: 'Failed to fetch receivables summary', error: error.message });

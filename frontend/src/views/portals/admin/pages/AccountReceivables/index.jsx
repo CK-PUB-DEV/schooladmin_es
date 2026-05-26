@@ -397,7 +397,7 @@ export default function AccountReceivables() {
     return { ...payload, ...extra };
   };
 
-  const fetchReceivablesSummary = async () => {
+  const fetchReceivablesSummary = async (bust = false) => {
     if (summaryAbortRef.current) summaryAbortRef.current.abort();
     const controller = new AbortController();
     summaryAbortRef.current = controller;
@@ -408,7 +408,7 @@ export default function AccountReceivables() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         credentials: 'include',
         signal: controller.signal,
-        body: JSON.stringify(buildPayload()),
+        body: JSON.stringify(buildPayload(bust ? { bustCache: true } : {})),
       });
       const result = await res.json();
       if (result.status === 'success') setSummaryData(result.data);
@@ -461,7 +461,7 @@ export default function AccountReceivables() {
 
   const handleRefresh = () => {
     clearTimeout(debounceRef.current);
-    fetchReceivablesSummary();
+    fetchReceivablesSummary(true);
     if (isFinanceV1) fetchReceivablesList();
   };
 
