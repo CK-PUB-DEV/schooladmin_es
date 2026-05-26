@@ -928,8 +928,8 @@ const fetchStudentTransactionRows = async (
   let limitClause = '';
 
   if (safePerPage > 0) {
-    limitClause = 'LIMIT ? OFFSET ?';
-    params.push(safePerPage, (safePage - 1) * safePerPage);
+    const safeOffset = (safePage - 1) * safePerPage;
+    limitClause = `LIMIT ${safePerPage} OFFSET ${safeOffset}`;
   }
 
   const [rows] = await db.execute(

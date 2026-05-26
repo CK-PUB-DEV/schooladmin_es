@@ -49,6 +49,7 @@ export default function AccountReceivables() {
         db_name: selectedSchool.db_name,
         db_username: selectedSchool.db_username || 'root',
         db_password: selectedSchool.db_password || '',
+        finance_v1: selectedSchool.finance_v1 || 0,
       }
     : null;
 
