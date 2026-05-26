@@ -1,10 +1,38 @@
 import mysql from 'mysql2/promise';
 
-const getSchoolConnection = async (schoolDbConfig) => {
+// Module-level pool cache — one pool per unique school DB, reused across requests
+// so we pay the TCP handshake cost once, not on every request.
+const _poolCache = new Map();
+
+const _resolvePort = (schoolDbConfig) => {
   const parsedPort = Number.parseInt(schoolDbConfig.db_port, 10);
-  const resolvedPort = Number.isNaN(parsedPort)
+  return Number.isNaN(parsedPort)
     ? Number.parseInt(process.env.DB_PORT, 10) || 3306
     : parsedPort;
+};
+
+const getSchoolPool = (schoolDbConfig) => {
+  const resolvedPort = _resolvePort(schoolDbConfig);
+  const cacheKey = `${schoolDbConfig.db_host || 'localhost'}:${resolvedPort}:${schoolDbConfig.db_name}:${schoolDbConfig.db_username}`;
+  if (!_poolCache.has(cacheKey)) {
+    const pool = mysql.createPool({
+      host: schoolDbConfig.db_host || process.env.DB_HOST || 'localhost',
+      user: schoolDbConfig.db_username,
+      password: schoolDbConfig.db_password || '',
+      database: schoolDbConfig.db_name,
+      port: resolvedPort,
+      connectTimeout: 15000,
+      waitForConnections: true,
+      connectionLimit: 5,
+      queueLimit: 20,
+    });
+    _poolCache.set(cacheKey, pool);
+  }
+  return _poolCache.get(cacheKey);
+};
+
+const getSchoolConnection = async (schoolDbConfig) => {
+  const resolvedPort = _resolvePort(schoolDbConfig);
   const connection = await mysql.createConnection({
     host: schoolDbConfig.db_host || process.env.DB_HOST || 'localhost',
     user: schoolDbConfig.db_username,
@@ -1579,12 +1607,11 @@ export const getAccountReceivableFilters = async (req, res) => {
       });
     }
 
-    const db = await getSchoolConnection(schoolDbConfig);
+    const pool = getSchoolPool(schoolDbConfig);
     const [programs, gradeLevels] = await Promise.all([
-      getAcademicPrograms(db),
-      getGradeLevels(db),
+      getAcademicPrograms(pool),
+      getGradeLevels(pool),
     ]);
-    await db.end();
 
     res.status(200).json({
       status: 'success',
@@ -1638,7 +1665,7 @@ export const getAccountReceivableList = async (req, res) => {
     // Process date range filter
     const dateRange = getDateRangeFromFilter(dateFilter, startDate, endDate);
 
-    const db = await getSchoolConnection(schoolDbConfig);
+    const pool = getSchoolPool(schoolDbConfig);
 
     if (shouldUseStudentTransactions({ dateRange, useStudledger })) {
       const listFilters = {
@@ -1653,8 +1680,7 @@ export const getAccountReceivableList = async (req, res) => {
 
       // Primary: student_transactions (pre-computed, fastest)
       try {
-        const precomputed = await fetchStudentTransactionRows(db, listFilters);
-        await db.end();
+        const precomputed = await fetchStudentTransactionRows(pool, listFilters);
         return res.status(200).json({
           status: 'success',
           data: precomputed.rows,
@@ -1677,8 +1703,7 @@ export const getAccountReceivableList = async (req, res) => {
 
       // Fallback: student_ledger running totals (fast, no per-student calculation)
       try {
-        const ledger = await fetchStudentLedgerBalances(db, listFilters);
-        await db.end();
+        const ledger = await fetchStudentLedgerBalances(pool, listFilters);
         return res.status(200).json({
           status: 'success',
           data: ledger.rows,
@@ -1698,6 +1723,8 @@ export const getAccountReceivableList = async (req, res) => {
       }
     }
 
+    // Slow path: fall back to per-student calculation using a dedicated connection
+    const db = await getSchoolConnection(schoolDbConfig);
     const schoolInfo = await getSchoolInfo(db);
     const balClassId = await getBalForwardClassId(db);
 
@@ -1780,8 +1807,18 @@ export const getAccountReceivableList = async (req, res) => {
  *
  * No per-student loops, no fallback to slow recalculation.
  */
+/**
+ * V2 Account Receivables Summary
+ *
+ * ONE query, ONE round-trip to the remote DB.
+ * Joins student_transactions → studinfo (for levelid) → gradelevel → academicprogram.
+ * Grand totals are aggregated in JS from the per-level rows — no second query needed.
+ *
+ * studinfo.levelid reflects the student's current enrolled level which is accurate
+ * for the active school year. If a program/level filter is passed, it is applied
+ * as a WHERE clause on that same single query.
+ */
 export const getAccountReceivableSummary = async (req, res) => {
-  let db;
   try {
     const { schoolDbConfig, syid, semid, programId, levelId } = req.body;
 
@@ -1789,62 +1826,64 @@ export const getAccountReceivableSummary = async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'schoolDbConfig and syid are required' });
     }
 
-    const numProgramId = programId ? Number(programId) : null;
-    const numLevelId   = levelId   ? Number(levelId)   : null;
+    const pool = getSchoolPool(schoolDbConfig);
 
-    db = await getSchoolConnection(schoolDbConfig);
+    const params = [syid];
+    const where  = ['st.syid = ?'];
+    if (semid)    { where.push('st.semid = ?');     params.push(semid); }
+    if (levelId)  { where.push('st.levelid = ?');   params.push(Number(levelId)); }
+    if (programId){ where.push('gl.acadprogid = ?');params.push(Number(programId)); }
 
-    // ── Query 1: main totals from student_transactions ────────────
-    const tParams = [syid];
-    const tWhere  = ['syid = ?'];
-    if (semid) { tWhere.push('semid = ?'); tParams.push(semid); }
+    const [rows] = await pool.execute(
+      `SELECT
+         gl.id                                                                              AS level_id,
+         gl.levelname,
+         gl.acadprogid                                                                      AS acadprog_id,
+         ap.progname                                                                        AS program_name,
+         COALESCE(SUM(st.total_payables), 0)                                               AS total_payables,
+         COALESCE(SUM(st.total_payment), 0)                                                AS total_payment,
+         COALESCE(SUM(CASE WHEN st.total_balance > 0 THEN st.total_balance ELSE 0 END), 0) AS total_balance,
+         COALESCE(SUM(st.total_overpayment), 0)                                            AS total_overpayment,
+         COUNT(*)                                                                           AS student_count,
+         SUM(CASE WHEN st.total_balance > 0 THEN 1 ELSE 0 END)                            AS students_with_balance
+       FROM student_transactions st
+       JOIN gradelevel gl ON gl.id = st.levelid
+       JOIN academicprogram ap ON ap.id = gl.acadprogid
+       WHERE ${where.join(' AND ')}
+       GROUP BY gl.id, gl.levelname, gl.acadprogid, ap.progname
+       ORDER BY ap.progname, gl.levelname`,
+      params
+    );
 
-    // ── Query 2: per-level breakdown via enrollment tables ────────
-    const tables = resolveEnrollTables({ programId: numProgramId, levelId: numLevelId });
-
-    const [totalsResult, ...breakdownResults] = await Promise.all([
-      db.execute(
-        `SELECT
-           COALESCE(SUM(total_payables), 0)                                  AS total_payables,
-           COALESCE(SUM(total_payment), 0)                                   AS total_payment,
-           COALESCE(SUM(CASE WHEN total_balance > 0 THEN total_balance ELSE 0 END), 0) AS total_balance,
-           COALESCE(SUM(total_overpayment), 0)                               AS total_overpayment,
-           COUNT(*)                                                           AS student_count,
-           SUM(CASE WHEN total_balance > 0 THEN 1 ELSE 0 END)               AS students_with_balance
-         FROM student_transactions
-         WHERE ${tWhere.join(' AND ')}`,
-        tParams
-      ),
-      ...tables.map(({ table, useSemJoin }) =>
-        queryEnrollBreakdown(db, {
-          syid, semid, table, useSemJoin,
-          programId: numProgramId,
-          levelId: numLevelId,
-        })
-      ),
-    ]);
-
-    const totals = totalsResult[0][0] || {};
-    const breakdown = breakdownResults.flat();
+    // Aggregate grand totals from per-level rows (no second query needed)
+    let tp = 0, tpay = 0, tb = 0, tov = 0, sc = 0, swb = 0;
+    for (const r of rows) {
+      tp   += toNumber(r.total_payables);
+      tpay += toNumber(r.total_payment);
+      tb   += toNumber(r.total_balance);
+      tov  += toNumber(r.total_overpayment);
+      sc   += toNumber(r.student_count);
+      swb  += toNumber(r.students_with_balance);
+    }
 
     return res.status(200).json({
       status: 'success',
       data: {
-        total_payables:       Number(toNumber(totals.total_payables).toFixed(2)),
-        total_payment:        Number(toNumber(totals.total_payment).toFixed(2)),
-        total_balance:        Number(toNumber(totals.total_balance).toFixed(2)),
-        total_overpayment:    Number(toNumber(totals.total_overpayment).toFixed(2)),
-        student_count:        toNumber(totals.student_count),
-        students_with_balance: toNumber(totals.students_with_balance),
-        breakdown: breakdown.map((r) => ({
-          level_id:       r.level_id,
-          levelname:      r.levelname,
-          acadprog_id:    r.acadprog_id,
-          program_name:   r.program_name,
-          total_payables:    Number(toNumber(r.total_payables).toFixed(2)),
-          total_payment:     Number(toNumber(r.total_payment).toFixed(2)),
-          total_balance:     Number(toNumber(r.total_balance).toFixed(2)),
-          total_overpayment: Number(toNumber(r.total_overpayment).toFixed(2)),
+        total_payables:        +tp.toFixed(2),
+        total_payment:         +tpay.toFixed(2),
+        total_balance:         +tb.toFixed(2),
+        total_overpayment:     +tov.toFixed(2),
+        student_count:         sc,
+        students_with_balance: swb,
+        breakdown: rows.map((r) => ({
+          level_id:          r.level_id,
+          levelname:         r.levelname,
+          acadprog_id:       r.acadprog_id,
+          program_name:      r.program_name,
+          total_payables:    +toNumber(r.total_payables).toFixed(2),
+          total_payment:     +toNumber(r.total_payment).toFixed(2),
+          total_balance:     +toNumber(r.total_balance).toFixed(2),
+          total_overpayment: +toNumber(r.total_overpayment).toFixed(2),
           student_count:     toNumber(r.student_count),
         })),
         source: 'student_transactions',
@@ -1853,8 +1892,6 @@ export const getAccountReceivableSummary = async (req, res) => {
   } catch (error) {
     console.error('Error fetching account receivables summary:', error);
     res.status(500).json({ status: 'error', message: 'Failed to fetch receivables summary', error: error.message });
-  } finally {
-    if (db) await db.end().catch(() => {});
   }
 };
 
@@ -1864,7 +1901,6 @@ export const getAccountReceivableSummary = async (req, res) => {
  * Only called when the user opens that tab.
  */
 export const getAccountReceivableTransactions = async (req, res) => {
-  let db;
   try {
     const { schoolDbConfig, syid, semid, studid, search, page = 1, perPage = 100 } = req.body;
 
@@ -1872,7 +1908,7 @@ export const getAccountReceivableTransactions = async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'schoolDbConfig and syid are required' });
     }
 
-    db = await getSchoolConnection(schoolDbConfig);
+    const pool = getSchoolPool(schoolDbConfig);
 
     const params = [syid];
     const where  = ['sl.syid = ?'];
@@ -1883,17 +1919,17 @@ export const getAccountReceivableTransactions = async (req, res) => {
       params.push(`%${search}%`, `%${search}%`);
     }
 
-    const whereStr   = `WHERE ${where.join(' AND ')}`;
-    const safePage   = Math.max(1, Number(page)    || 1);
+    const whereStr    = `WHERE ${where.join(' AND ')}`;
+    const safePage    = Math.max(1, Number(page)    || 1);
     const safePerPage = Math.min(500, Math.max(1, Number(perPage) || 100));
-    const offset     = (safePage - 1) * safePerPage;
+    const offset      = (safePage - 1) * safePerPage;
 
     const [[countRows], [rows]] = await Promise.all([
-      db.execute(
+      pool.execute(
         `SELECT COUNT(*) AS total FROM student_ledger sl JOIN studinfo si ON si.id = sl.studid ${whereStr}`,
         params
       ),
-      db.execute(
+      pool.execute(
         `SELECT
            sl.id,
            sl.studid,
@@ -1930,8 +1966,6 @@ export const getAccountReceivableTransactions = async (req, res) => {
   } catch (error) {
     console.error('Error fetching account receivable transactions:', error);
     res.status(500).json({ status: 'error', message: 'Failed to fetch transactions', error: error.message });
-  } finally {
-    if (db) await db.end().catch(() => {});
   }
 };
 
