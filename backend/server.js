@@ -16,7 +16,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const CORS_ORIGIN = ' http://localhost:5173';
+const CORS_ORIGIN = ' https://schooladmin.essentiel.ph';
 
 // CORS configuration
 const corsOptions = {
@@ -65,6 +65,45 @@ app.get('/api/db-test', async (req, res) => {
       message: 'Database connection failed',
       error: error.message
     });
+  }
+});
+
+// Temporary diagnostic route — no auth, GET, open in browser
+// Usage: /api/ar-test?host=139.180.143.50&port=3306&db=esrpci&user=root&pass=&syid=1&semid=1
+app.get('/api/ar-test', async (req, res) => {
+  const mysql = (await import('mysql2/promise')).default;
+  const { host, port, db: dbName, user, pass, syid, semid } = req.query;
+  if (!host || !dbName || !syid) {
+    return res.json({ error: 'Required: host, db, syid' });
+  }
+  const t0 = Date.now();
+  let conn;
+  try {
+    conn = await mysql.createConnection({
+      host, port: Number(port) || 3306, database: dbName,
+      user: user || 'root', password: pass || '',
+      connectTimeout: 15000,
+    });
+    const tConn = Date.now();
+    const params = [syid];
+    const where = ['syid = ?'];
+    if (semid) { where.push('semid IN (0, ?)'); params.push(semid); }
+    const [[row]] = await conn.execute(
+      `SELECT COUNT(*) AS cnt, COALESCE(SUM(total_payables),0) AS tp FROM student_transactions WHERE ${where.join(' AND ')}`,
+      params
+    );
+    const tQuery = Date.now();
+    res.json({
+      connect_ms: tConn - t0,
+      query_ms:   tQuery - tConn,
+      total_ms:   tQuery - t0,
+      count:      row.cnt,
+      total_payables: row.tp,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message, elapsed_ms: Date.now() - t0 });
+  } finally {
+    if (conn) await conn.end().catch(() => {});
   }
 });
 
