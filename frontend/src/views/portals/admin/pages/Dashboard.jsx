@@ -101,11 +101,16 @@ function BarChart({ data, height = 200 }) {
   )
 }
 
-function RevenueFlowChart({ data = [], labels = [] }) {
-  const visible = data.slice(-3)
-  const visibleLabels = labels.slice(-3)
-  const maxValue = Math.max(...visible.map(toNumber), 1)
-  const palette = ['bg-indigo-500', 'bg-violet-400', 'bg-sky-400', 'bg-teal-400']
+function SalesVolumeChart({ data = [], labels = [] }) {
+  const visible = data.slice(-7).map(toNumber)
+  const visibleLabels = labels.slice(-7)
+  const offset = Math.max(data.length - visible.length, 0)
+  const previous = visible.map((_, index) => toNumber(data[offset + index - 1]))
+  const maxValue = Math.max(...visible, ...previous, 1)
+  const latestIndex = visible.length - 1
+  const latestValue = visible[latestIndex] || 0
+  const latestPrevious = previous[latestIndex] || 0
+  const latestChange = latestPrevious > 0 ? ((latestValue - latestPrevious) / latestPrevious) * 100 : null
 
   if (visible.length === 0) {
     return (
@@ -116,30 +121,76 @@ function RevenueFlowChart({ data = [], labels = [] }) {
   }
 
   return (
-    <div className='relative h-64 overflow-hidden rounded-lg border bg-muted/10 px-5 pb-8 pt-7'>
-      <div className='absolute inset-x-8 top-24 hidden h-24 skew-y-6 bg-gradient-to-r from-teal-400/15 via-violet-400/15 to-sky-400/15 md:block' />
-      <div className='relative grid h-full grid-cols-3 items-end gap-6'>
-        {visible.map((value, index) => {
-          const amount = toNumber(value)
-          const height = Math.max((amount / maxValue) * 132, 28)
-          const segmentHeight = Math.max(height / palette.length - 3, 10)
+    <div className='rounded-lg border bg-background p-4'>
+      <div className='mb-4 flex flex-wrap items-start justify-between gap-3'>
+        <div className='space-y-2'>
+          <div className='text-sm font-semibold'>Sales Volume</div>
+          <div className='flex flex-wrap items-center gap-4 text-xs text-muted-foreground'>
+            <span className='inline-flex items-center gap-1.5'>
+              <span className='h-2.5 w-2.5 rounded-sm bg-sky-400' />
+              Previous
+            </span>
+            <span className='inline-flex items-center gap-1.5'>
+              <span className='h-2.5 w-2.5 rounded-sm bg-blue-600' />
+              Collections
+            </span>
+          </div>
+        </div>
+        <div className='flex gap-2 text-[10px] text-muted-foreground'>
+          <span className='font-medium text-foreground'>Monthly</span>
+          <span>Quarterly</span>
+          <span>Yearly</span>
+        </div>
+      </div>
 
-          return (
-            <div key={`${visibleLabels[index] || index}-${amount}`} className='flex h-full flex-col items-center justify-end gap-3'>
-              <div className='text-center text-xs font-medium text-foreground'>{formatCurrency(amount)}</div>
-              <div className='flex w-full max-w-[96px] flex-col-reverse gap-1'>
-                {palette.map((color, colorIndex) => (
+      <div className='relative h-56'>
+        <div className='absolute inset-x-0 bottom-8 top-1 grid grid-rows-4'>
+          {[0, 1, 2, 3].map((line) => (
+            <div key={line} className='border-t border-border/60' />
+          ))}
+        </div>
+        {latestChange !== null ? (
+          <div className='absolute left-[50%] top-7 z-10 -translate-x-1/2 rounded-sm bg-slate-900 px-2 py-1 text-center text-[10px] font-medium text-white shadow-sm dark:bg-white dark:text-slate-900'>
+            <div>{formatSignedPercent(latestChange)}</div>
+            <div className='font-normal opacity-75'>Collections</div>
+          </div>
+        ) : null}
+        <div
+          className='relative grid h-full items-end gap-2 pb-8'
+          style={{ gridTemplateColumns: `repeat(${visible.length}, minmax(0, 1fr))` }}
+        >
+          {visible.map((amount, index) => {
+            const previousAmount = previous[index]
+            const currentHeight = Math.max((amount / maxValue) * 150, amount > 0 ? 14 : 0)
+            const previousHeight = Math.max((previousAmount / maxValue) * 150, previousAmount > 0 ? 14 : 0)
+            const label = visibleLabels[index] || `M${index + 1}`
+            const isLatest = index === latestIndex
+
+            return (
+              <div key={`${label}-${index}`} className='flex min-w-0 flex-col items-center justify-end gap-2'>
+                <div className='flex h-[158px] w-full max-w-[58px] items-end justify-center gap-1.5'>
                   <div
-                    key={color}
-                    className={`rounded-md ${color}`}
-                    style={{ height: `${segmentHeight + colorIndex * 2}px`, opacity: 0.86 + colorIndex * 0.03 }}
+                    className='w-full rounded-t-sm bg-sky-400 transition-opacity hover:opacity-80'
+                    style={{ height: `${previousHeight}px` }}
+                    title={`${label} previous: ${formatCurrency(previousAmount)}`}
                   />
-                ))}
+                  <div
+                    className='relative w-full rounded-t-sm bg-blue-600 transition-opacity hover:opacity-80'
+                    style={{ height: `${currentHeight}px` }}
+                    title={`${label} collections: ${formatCurrency(amount)}`}
+                  >
+                    {isLatest ? (
+                      <span className='absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-semibold text-foreground'>
+                        {formatCurrency(amount)}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                <div className='w-full truncate text-center text-xs text-muted-foreground'>{label}</div>
               </div>
-              <div className='text-xs text-muted-foreground'>{visibleLabels[index] || `M${index + 1}`}</div>
-            </div>
-          )
-        })}
+            )
+          })}
+        </div>
       </div>
     </div>
   )
@@ -688,7 +739,7 @@ export default function AdminDashboard() {
                 {momChange === null ? 'No previous month comparison' : `${formatCurrency(lastMonthCollections - prevMonthCollections)} from previous month`}
               </span>
             </div>
-            <RevenueFlowChart data={collectionsSeries} labels={monthLabels} />
+            <SalesVolumeChart data={collectionsSeries} labels={monthLabels} />
             <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-4'>
               <div className='rounded-lg border bg-background p-3'>
                 <div className='text-xs text-muted-foreground'>Collections today</div>
