@@ -493,10 +493,6 @@ export default function AdminDashboard() {
     collectionsSeries.length > 0
       ? collectionsSeries.reduce((sum, value) => sum + value, 0) / collectionsSeries.length
       : 0
-  const lastMonthIndex = collectionsSeries.length - 1
-  const prevMonthCollections = collectionsSeries[lastMonthIndex - 1] || 0
-  const momChange =
-    prevMonthCollections > 0 ? ((toNumber(data.kpis.collectionsMTD) - prevMonthCollections) / prevMonthCollections) * 100 : null
   const mtdVsAvg = avgMonthly > 0 ? ((toNumber(data.kpis.collectionsMTD) - avgMonthly) / avgMonthly) * 100 : null
 
   const enrolledStudents = toNumber(data.kpis.enrolledStudents)
