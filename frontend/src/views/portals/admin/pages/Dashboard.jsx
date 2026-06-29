@@ -104,13 +104,7 @@ function BarChart({ data, height = 200 }) {
 function SalesVolumeChart({ data = [], labels = [] }) {
   const visible = data.slice(-7).map(toNumber)
   const visibleLabels = labels.slice(-7)
-  const offset = Math.max(data.length - visible.length, 0)
-  const previous = visible.map((_, index) => toNumber(data[offset + index - 1]))
-  const maxValue = Math.max(...visible, ...previous, 1)
-  const latestIndex = visible.length - 1
-  const latestValue = visible[latestIndex] || 0
-  const latestPrevious = previous[latestIndex] || 0
-  const latestChange = latestPrevious > 0 ? ((latestValue - latestPrevious) / latestPrevious) * 100 : null
+  const maxValue = Math.max(...visible, 1)
 
   if (visible.length === 0) {
     return (
@@ -127,19 +121,10 @@ function SalesVolumeChart({ data = [], labels = [] }) {
           <div className='text-sm font-semibold'>Sales Volume</div>
           <div className='flex flex-wrap items-center gap-4 text-xs text-muted-foreground'>
             <span className='inline-flex items-center gap-1.5'>
-              <span className='h-2.5 w-2.5 rounded-sm bg-sky-400' />
-              Previous
-            </span>
-            <span className='inline-flex items-center gap-1.5'>
-              <span className='h-2.5 w-2.5 rounded-sm bg-blue-600' />
-              Collections
+              <span className='h-2.5 w-2.5 rounded-sm bg-sky-500' />
+              Current school year collections
             </span>
           </div>
-        </div>
-        <div className='flex gap-2 text-[10px] text-muted-foreground'>
-          <span className='font-medium text-foreground'>Monthly</span>
-          <span>Quarterly</span>
-          <span>Yearly</span>
         </div>
       </div>
 
@@ -149,41 +134,25 @@ function SalesVolumeChart({ data = [], labels = [] }) {
             <div key={line} className='border-t border-border/60' />
           ))}
         </div>
-        {latestChange !== null ? (
-          <div className='absolute left-[50%] top-7 z-10 -translate-x-1/2 rounded-sm bg-slate-900 px-2 py-1 text-center text-[10px] font-medium text-white shadow-sm dark:bg-white dark:text-slate-900'>
-            <div>{formatSignedPercent(latestChange)}</div>
-            <div className='font-normal opacity-75'>Collections</div>
-          </div>
-        ) : null}
         <div
           className='relative grid h-full items-end gap-2 pb-8'
           style={{ gridTemplateColumns: `repeat(${visible.length}, minmax(0, 1fr))` }}
         >
           {visible.map((amount, index) => {
-            const previousAmount = previous[index]
-            const currentHeight = Math.max((amount / maxValue) * 150, amount > 0 ? 14 : 0)
-            const previousHeight = Math.max((previousAmount / maxValue) * 150, previousAmount > 0 ? 14 : 0)
+            const currentHeight = Math.max((amount / maxValue) * 145, amount > 0 ? 14 : 0)
             const label = visibleLabels[index] || `M${index + 1}`
-            const isLatest = index === latestIndex
 
             return (
               <div key={`${label}-${index}`} className='flex min-w-0 flex-col items-center justify-end gap-2'>
-                <div className='flex h-[158px] w-full max-w-[58px] items-end justify-center gap-1.5'>
+                <div className='flex h-[158px] w-full max-w-[58px] items-end justify-center'>
                   <div
-                    className='w-full rounded-t-sm bg-sky-400 transition-opacity hover:opacity-80'
-                    style={{ height: `${previousHeight}px` }}
-                    title={`${label} previous: ${formatCurrency(previousAmount)}`}
-                  />
-                  <div
-                    className='relative w-full rounded-t-sm bg-blue-600 transition-opacity hover:opacity-80'
+                    className='relative w-full max-w-[34px] rounded-t-sm bg-sky-500 transition-opacity hover:opacity-80'
                     style={{ height: `${currentHeight}px` }}
                     title={`${label} collections: ${formatCurrency(amount)}`}
                   >
-                    {isLatest ? (
-                      <span className='absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-semibold text-foreground'>
-                        {formatCurrency(amount)}
-                      </span>
-                    ) : null}
+                    <span className='absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-semibold text-foreground'>
+                      {formatCurrency(amount)}
+                    </span>
                   </div>
                 </div>
                 <div className='w-full truncate text-center text-xs text-muted-foreground'>{label}</div>
@@ -525,14 +494,10 @@ export default function AdminDashboard() {
       ? collectionsSeries.reduce((sum, value) => sum + value, 0) / collectionsSeries.length
       : 0
   const lastMonthIndex = collectionsSeries.length - 1
-  const lastMonthCollections = collectionsSeries[lastMonthIndex] || 0
   const prevMonthCollections = collectionsSeries[lastMonthIndex - 1] || 0
   const momChange =
-    prevMonthCollections > 0 ? ((lastMonthCollections - prevMonthCollections) / prevMonthCollections) * 100 : null
+    prevMonthCollections > 0 ? ((toNumber(data.kpis.collectionsMTD) - prevMonthCollections) / prevMonthCollections) * 100 : null
   const mtdVsAvg = avgMonthly > 0 ? ((toNumber(data.kpis.collectionsMTD) - avgMonthly) / avgMonthly) * 100 : null
-  const bestMonthValue = collectionsSeries.length ? Math.max(...collectionsSeries) : 0
-  const bestMonthIndex = collectionsSeries.length ? collectionsSeries.indexOf(bestMonthValue) : -1
-  const bestMonthLabel = bestMonthIndex >= 0 ? monthLabels[bestMonthIndex] : null
 
   const enrolledStudents = toNumber(data.kpis.enrolledStudents)
   const pendingEnrollments = toNumber(data.kpis.pendingEnrollments)
@@ -734,13 +699,10 @@ export default function AdminDashboard() {
           <CardContent className='space-y-5 px-5 pb-5 pt-4'>
             <div className='flex flex-wrap items-center gap-3'>
               <div className='text-3xl font-semibold tracking-normal'>{formatCurrency(collectionsMTD)}</div>
-              <TrendBadge value={mtdVsAvg} label='vs avg' />
-              <span className='text-xs text-muted-foreground'>
-                {momChange === null ? 'No previous month comparison' : `${formatCurrency(lastMonthCollections - prevMonthCollections)} from previous month`}
-              </span>
+              <span className='text-xs text-muted-foreground'>Current school year collections</span>
             </div>
             <SalesVolumeChart data={collectionsSeries} labels={monthLabels} />
-            <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-4'>
+            <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
               <div className='rounded-lg border bg-background p-3'>
                 <div className='text-xs text-muted-foreground'>Collections today</div>
                 <div className='whitespace-normal break-words text-lg font-semibold leading-tight'>{formatCurrency(collectionsToday)}</div>
@@ -758,39 +720,7 @@ export default function AdminDashboard() {
                 <div className='whitespace-normal break-words text-lg font-semibold leading-tight'>{formatCurrency(avgMonthly)}</div>
                 <p className='text-xs text-muted-foreground'>Monthly baseline</p>
               </div>
-              <div className='rounded-lg border bg-background p-3'>
-                <div className='flex items-center justify-between text-xs text-muted-foreground'>
-                  <span>MoM change</span>
-                  {momChange === null ? null : momChange >= 0 ? (
-                    <TrendingUp className='h-3 w-3 text-emerald-500' />
-                  ) : (
-                    <TrendingDown className='h-3 w-3 text-rose-500' />
-                  )}
-                </div>
-                <div className='whitespace-normal break-words text-lg font-semibold leading-tight'>
-                  {momChange === null ? 'N/A' : formatSignedPercent(momChange)}
-                </div>
-                <p className='text-xs text-muted-foreground'>Vs previous month</p>
-              </div>
             </div>
-            <div className='flex flex-wrap items-center gap-2 text-xs text-muted-foreground'>
-              <span>Best month: {bestMonthLabel || 'N/A'}</span>
-              <span>|</span>
-              <span>Peak: {formatCurrency(bestMonthValue)}</span>
-              <span>|</span>
-              <span>Last month: {monthLabels[lastMonthIndex] || 'N/A'}</span>
-            </div>
-            {monthLabels.length > 0 ? (
-              <div className='grid grid-cols-6 gap-2 text-[10px] uppercase text-muted-foreground'>
-                {monthLabels.slice(-6).map((label) => (
-                  <span key={label} className='text-center'>
-                    {label}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <p className='text-xs text-muted-foreground'>No collection history yet.</p>
-            )}
           </CardContent>
         </Card>
 
