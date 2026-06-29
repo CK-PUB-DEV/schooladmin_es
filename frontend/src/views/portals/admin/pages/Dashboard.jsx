@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { createElement, useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
@@ -44,120 +44,24 @@ const formatSignedPercent = (value) => {
   return `${sign}${formatPercent(safe)}`
 }
 
-const buildSparklinePoints = (values, width, height, padding) => {
-  if (!Array.isArray(values) || values.length < 2) return ''
-  const numbers = values.map(toNumber)
-  const min = Math.min(...numbers)
-  const max = Math.max(...numbers)
-  const range = max - min || 1
+function TrendBadge({ value, label }) {
+  if (value === null || value === undefined) return null
 
-  return numbers
-    .map((value, index) => {
-      const x = padding + (index / (numbers.length - 1)) * (width - padding * 2)
-      const y = height - padding - ((value - min) / range) * (height - padding * 2)
-      return `${x},${y}`
-    })
-    .join(' ')
-}
-
-function Sparkline({ data, className }) {
-  const width = 120
-  const height = 36
-  const padding = 3
-  const points = useMemo(() => buildSparklinePoints(data, width, height, padding), [data])
-
-  if (!points) return null
+  const safe = toNumber(value)
+  const positive = safe >= 0
 
   return (
-    <svg
-      className={className}
-      viewBox={`0 0 ${width} ${height}`}
-      width={width}
-      height={height}
-      aria-hidden='true'
+    <span
+      className={`inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[10px] font-medium ${
+        positive
+          ? 'bg-teal-500/10 text-teal-600 dark:text-teal-300'
+          : 'bg-rose-500/10 text-rose-600 dark:text-rose-300'
+      }`}
     >
-      <polyline
-        points={points}
-        fill='none'
-        stroke='currentColor'
-        strokeWidth='2'
-        strokeLinecap='round'
-        strokeLinejoin='round'
-      />
-    </svg>
-  )
-}
-
-const buildLinePath = (values, width, height, padding) => {
-  if (!Array.isArray(values) || values.length < 2) return ''
-  const numbers = values.map(toNumber)
-  const min = Math.min(...numbers)
-  const max = Math.max(...numbers)
-  const range = max - min || 1
-
-  return numbers
-    .map((value, index) => {
-      const x = padding + (index / (numbers.length - 1)) * (width - padding * 2)
-      const y = height - padding - ((value - min) / range) * (height - padding * 2)
-      return `${index === 0 ? 'M' : 'L'} ${x} ${y}`
-    })
-    .join(' ')
-}
-
-function MiniLineChart({ series = [] }) {
-  const width = 520
-  const height = 160
-  const padding = 14
-
-  return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      className='h-40 w-full'
-      role='img'
-      aria-label='Chart'
-    >
-      <defs>
-        <linearGradient id='area-primary' x1='0' y1='0' x2='0' y2='1'>
-          <stop offset='0%' stopColor='hsl(var(--primary))' stopOpacity='0.22' />
-          <stop offset='100%' stopColor='hsl(var(--primary))' stopOpacity='0' />
-        </linearGradient>
-      </defs>
-
-      {[0, 1, 2, 3].map((i) => (
-        <line
-          key={i}
-          x1={padding}
-          x2={width - padding}
-          y1={padding + (i * (height - padding * 2)) / 3}
-          y2={padding + (i * (height - padding * 2)) / 3}
-          stroke='hsl(var(--border))'
-          strokeOpacity='0.6'
-          strokeWidth='1'
-        />
-      ))}
-
-      {series.map((item, index) => {
-        const path = buildLinePath(item.data, width, height, padding)
-        if (!path) return null
-
-        const areaPath = `${path} L ${width - padding} ${height - padding} L ${padding} ${height - padding} Z`
-        const isPrimary = index === 0
-
-        return (
-          <g key={item.label}>
-            {isPrimary ? <path d={areaPath} fill='url(#area-primary)' stroke='none' /> : null}
-            <path
-              d={path}
-              fill='none'
-              stroke={item.stroke}
-              strokeWidth='2'
-              strokeLinecap='round'
-              strokeLinejoin='round'
-            />
-          </g>
-        )
-      })}
-    </svg>
+      {formatSignedPercent(safe)}
+      {positive ? <ArrowUpRight className='h-3 w-3' /> : <TrendingDown className='h-3 w-3' />}
+      {label ? <span className='text-muted-foreground'>{label}</span> : null}
+    </span>
   )
 }
 function BarChart({ data, height = 200 }) {
@@ -197,6 +101,50 @@ function BarChart({ data, height = 200 }) {
   )
 }
 
+function RevenueFlowChart({ data = [], labels = [] }) {
+  const visible = data.slice(-3)
+  const visibleLabels = labels.slice(-3)
+  const maxValue = Math.max(...visible.map(toNumber), 1)
+  const palette = ['bg-indigo-500', 'bg-violet-400', 'bg-sky-400', 'bg-teal-400']
+
+  if (visible.length === 0) {
+    return (
+      <div className='flex h-64 items-center justify-center rounded-lg border bg-muted/20 text-sm text-muted-foreground'>
+        No collection history yet.
+      </div>
+    )
+  }
+
+  return (
+    <div className='relative h-64 overflow-hidden rounded-lg border bg-muted/10 px-5 pb-8 pt-7'>
+      <div className='absolute inset-x-8 top-24 hidden h-24 skew-y-6 bg-gradient-to-r from-teal-400/15 via-violet-400/15 to-sky-400/15 md:block' />
+      <div className='relative grid h-full grid-cols-3 items-end gap-6'>
+        {visible.map((value, index) => {
+          const amount = toNumber(value)
+          const height = Math.max((amount / maxValue) * 132, 28)
+          const segmentHeight = Math.max(height / palette.length - 3, 10)
+
+          return (
+            <div key={`${visibleLabels[index] || index}-${amount}`} className='flex h-full flex-col items-center justify-end gap-3'>
+              <div className='text-center text-xs font-medium text-foreground'>{formatCurrency(amount)}</div>
+              <div className='flex w-full max-w-[96px] flex-col-reverse gap-1'>
+                {palette.map((color, colorIndex) => (
+                  <div
+                    key={color}
+                    className={`rounded-md ${color}`}
+                    style={{ height: `${segmentHeight + colorIndex * 2}px`, opacity: 0.86 + colorIndex * 0.03 }}
+                  />
+                ))}
+              </div>
+              <div className='text-xs text-muted-foreground'>{visibleLabels[index] || `M${index + 1}`}</div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function DonutChart({ data, size = 120 }) {
   if (!data || data.length === 0 || data.every((d) => toNumber(d.value) === 0)) {
     return (
@@ -209,8 +157,6 @@ function DonutChart({ data, size = 120 }) {
   const total = data.reduce((sum, item) => sum + toNumber(item.value), 0)
   const radius = size / 2 - 10
   const circumference = 2 * Math.PI * radius
-  let currentAngle = -90
-
   const colors = [
     'hsl(var(--primary))',
     'hsl(var(--chart-2))',
@@ -218,6 +164,23 @@ function DonutChart({ data, size = 120 }) {
     'hsl(var(--chart-4))',
     'hsl(var(--chart-5))',
   ]
+  const slices = data.reduce(
+    (items, item) => {
+      const percentage = (toNumber(item.value) / total) * 100
+      const rotation = items.angle
+
+      items.angle += (percentage / 100) * 360
+      items.values.push({
+        item,
+        percentage,
+        rotation,
+        dashOffset: circumference - (percentage / 100) * circumference,
+      })
+
+      return items
+    },
+    { angle: -90, values: [] }
+  ).values
 
   return (
     <div className='flex items-center gap-4'>
@@ -230,28 +193,21 @@ function DonutChart({ data, size = 120 }) {
           stroke='hsl(var(--muted))'
           strokeWidth='16'
         />
-        {data.map((item, index) => {
-          const percentage = (toNumber(item.value) / total) * 100
-          const dashOffset = circumference - (percentage / 100) * circumference
-          const rotation = currentAngle
-          currentAngle += (percentage / 100) * 360
-
-          return (
-            <circle
-              key={index}
-              cx={size / 2}
-              cy={size / 2}
-              r={radius}
-              fill='none'
-              stroke={colors[index % colors.length]}
-              strokeWidth='16'
-              strokeDasharray={circumference}
-              strokeDashoffset={dashOffset}
-              transform={`rotate(${rotation} ${size / 2} ${size / 2})`}
-              className='transition-all'
-            />
-          )
-        })}
+        {slices.map((slice, index) => (
+          <circle
+            key={`${slice.item.label}-${index}`}
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill='none'
+            stroke={colors[index % colors.length]}
+            strokeWidth='16'
+            strokeDasharray={circumference}
+            strokeDashoffset={slice.dashOffset}
+            transform={`rotate(${slice.rotation} ${size / 2} ${size / 2})`}
+            className='transition-all'
+          />
+        ))}
       </svg>
       <div className='flex-1 space-y-2'>
         {data.map((item, index) => {
@@ -315,15 +271,15 @@ function ProgressRing({ value, max, label, size = 100 }) {
   )
 }
 
-function ReportLink({ icon: Icon, title, description, href }) {
+function ReportLink({ icon, title, description, href }) {
   return (
     <Link
       to={href}
-      className='group flex items-center justify-between gap-3 rounded-lg border bg-muted/20 p-3 transition-colors hover:bg-muted/40'
+      className='group flex items-center justify-between gap-3 rounded-lg border bg-background p-3 transition-colors hover:bg-muted/30'
     >
       <div className='flex min-w-0 items-center gap-3'>
-        <div className='flex h-10 w-10 items-center justify-center rounded-md bg-muted/40 text-primary'>
-          <Icon className='h-4 w-4' />
+        <div className='flex h-9 w-9 items-center justify-center rounded-md bg-muted/40 text-primary'>
+          {createElement(icon, { className: 'h-4 w-4' })}
         </div>
         <div className='min-w-0'>
           <div className='text-sm font-medium truncate'>{title}</div>
@@ -335,7 +291,7 @@ function ReportLink({ icon: Icon, title, description, href }) {
   )
 }
 
-function StatCard({ title, value, helper, trend, href, format, watermark, icon: Icon, loading }) {
+function StatCard({ title, value, helper, trendValue, href, format, watermark, icon: Icon, loading }) {
   const formattedValue = (() => {
     if (loading) return '...'
     if (format === 'currency') return formatCurrency(value)
@@ -344,22 +300,29 @@ function StatCard({ title, value, helper, trend, href, format, watermark, icon: 
   })()
 
   return (
-    <Card className='transition-colors hover:bg-muted/30' data-watermark={watermark}>
-      <CardHeader className='flex flex-row items-center justify-between space-y-0 pb-2'>
-        <CardTitle className='text-sm font-medium'>{title}</CardTitle>
-        {Icon ? <Icon className='h-4 w-4 text-muted-foreground' /> : null}
-      </CardHeader>
-      <CardContent className='space-y-3'>
-        <div className='flex items-start justify-between gap-3'>
-          <div className='min-w-0'>
-            <div className='text-2xl font-bold truncate'>{formattedValue}</div>
-            <p className='text-xs text-muted-foreground'>{helper}</p>
-          </div>
-          {trend && trend.length > 0 ? (
-            <div className='flex flex-col items-end gap-1'>
-              <Sparkline data={trend} className='text-muted-foreground' />
-            </div>
+    <Card className='gap-0 rounded-lg py-0 transition-colors hover:bg-muted/20' data-watermark={watermark}>
+      <CardHeader className='flex flex-row items-center justify-between space-y-0 px-4 pb-0 pt-4'>
+        <div className='flex items-center gap-2'>
+          {Icon ? (
+            <span className='flex h-6 w-6 items-center justify-center rounded-md bg-muted/50 text-muted-foreground'>
+              <Icon className='h-3.5 w-3.5' />
+            </span>
           ) : null}
+          <CardTitle className='text-sm font-medium text-muted-foreground'>{title}</CardTitle>
+        </div>
+        <AlertCircle className='h-3.5 w-3.5 text-muted-foreground/70' />
+      </CardHeader>
+      <CardContent className='px-4 pb-4 pt-3'>
+        <div className='flex min-h-[54px] flex-col justify-between gap-2'>
+          <div className='min-w-0'>
+            <div className='whitespace-normal break-words text-[clamp(1.35rem,1.9vw,1.875rem)] font-semibold leading-tight tracking-normal'>
+              {formattedValue}
+            </div>
+            <div className='mt-2 flex flex-wrap items-center gap-2'>
+              <TrendBadge value={trendValue} />
+              <p className='text-xs text-muted-foreground'>{helper}</p>
+            </div>
+          </div>
         </div>
         {href ? (
           <Button asChild variant='ghost' size='sm' className='px-0 justify-start'>
@@ -408,18 +371,22 @@ export default function AdminDashboard() {
   )
   const token = localStorage.getItem('token')
 
-  const schoolDbConfig = selectedSchool
-    ? {
-        db_host: selectedSchool.db_host || 'localhost',
-        db_port: selectedSchool.db_port || 3306,
-        db_name: selectedSchool.db_name,
-        db_username: selectedSchool.db_username || 'root',
-        db_password: selectedSchool.db_password || '',
-        finance_v1: selectedSchool.finance_v1,
-      }
-    : null
+  const schoolDbConfig = useMemo(
+    () =>
+      selectedSchool
+        ? {
+            db_host: selectedSchool.db_host || 'localhost',
+            db_port: selectedSchool.db_port || 3306,
+            db_name: selectedSchool.db_name,
+            db_username: selectedSchool.db_username || 'root',
+            db_password: selectedSchool.db_password || '',
+            finance_v1: selectedSchool.finance_v1,
+          }
+        : null,
+    [selectedSchool]
+  )
 
-  const fetchDashboardData = async () => {
+  const fetchDashboardData = useCallback(async () => {
     if (!selectedSchool) {
       setError('No school selected')
       setLoading(false)
@@ -456,11 +423,11 @@ export default function AdminDashboard() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [schoolDbConfig, selectedSchool, token])
 
   useEffect(() => {
     fetchDashboardData()
-  }, [])
+  }, [fetchDashboardData])
 
   if (loading && !dashboardData) {
     return (
@@ -530,6 +497,7 @@ export default function AdminDashboard() {
   const pendingRate = enrollmentTotal > 0 ? (pendingEnrollments / enrollmentTotal) * 100 : 0
   const collectionCoverage = receivables > 0 ? (collectionsMTD / receivables) * 100 : 0
   const collectionCoverageClamped = Math.min(collectionCoverage, 100)
+  const todayVsMtd = collectionsMTD > 0 ? (collectionsToday / collectionsMTD) * 100 : null
 
   const departments = data.charts.departments || []
   const departmentsTotal = departments.reduce((sum, dept) => sum + toNumber(dept.value), 0)
@@ -556,7 +524,7 @@ export default function AdminDashboard() {
       value: collectionsToday,
       helper: 'Cashier totals',
       icon: DollarSign,
-      trend: collectionsSeries.slice(-6),
+      trendValue: todayVsMtd,
       format: 'currency',
     },
     {
@@ -566,7 +534,7 @@ export default function AdminDashboard() {
       value: collectionsMTD,
       helper: 'Month-to-date total',
       icon: LineChart,
-      trend: collectionsSeries.slice(-6),
+      trendValue: mtdVsAvg,
       format: 'currency',
     },
     {
@@ -576,6 +544,7 @@ export default function AdminDashboard() {
       value: receivables,
       helper: 'Outstanding balance',
       icon: FileText,
+      trendValue: collectionCoverage,
       format: 'currency',
     },
     {
@@ -585,6 +554,7 @@ export default function AdminDashboard() {
       value: enrolledStudents,
       helper: 'Active enrollments',
       icon: GraduationCap,
+      trendValue: enrollmentRate,
     },
     {
       key: 'pending',
@@ -593,6 +563,7 @@ export default function AdminDashboard() {
       value: pendingEnrollments,
       helper: 'Awaiting confirmation',
       icon: Users,
+      trendValue: pendingRate,
     },
     {
       key: 'employees',
@@ -617,14 +588,6 @@ export default function AdminDashboard() {
       value: memosThisWeek,
       helper: 'Latest communications',
       icon: Megaphone,
-    },
-  ]
-
-  const financeSeries = [
-    {
-      label: 'Collections',
-      data: collectionsSeries,
-      stroke: 'hsl(var(--primary))',
     },
   ]
 
@@ -707,37 +670,44 @@ export default function AdminDashboard() {
         ))}
       </div>
       <div className='grid gap-4 lg:grid-cols-12'>
-        <Card className='shadow-sm lg:col-span-7' data-watermark='FIN'>
-          <CardHeader className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+        <Card className='gap-0 rounded-lg py-0 shadow-sm lg:col-span-7' data-watermark='FIN'>
+          <CardHeader className='flex flex-col gap-2 px-5 pb-0 pt-5 sm:flex-row sm:items-center sm:justify-between'>
             <div>
-              <CardTitle>Finance Pulse</CardTitle>
+              <CardTitle>Sales Overview</CardTitle>
               <CardDescription>Collections and cash flow signals</CardDescription>
             </div>
             <Button asChild variant='outline' size='sm'>
               <Link to='/admin/finance/monthly-summary'>Open finance reports</Link>
             </Button>
           </CardHeader>
-          <CardContent className='space-y-4'>
-            <MiniLineChart series={financeSeries} />
+          <CardContent className='space-y-5 px-5 pb-5 pt-4'>
+            <div className='flex flex-wrap items-center gap-3'>
+              <div className='text-3xl font-semibold tracking-normal'>{formatCurrency(collectionsMTD)}</div>
+              <TrendBadge value={mtdVsAvg} label='vs avg' />
+              <span className='text-xs text-muted-foreground'>
+                {momChange === null ? 'No previous month comparison' : `${formatCurrency(lastMonthCollections - prevMonthCollections)} from previous month`}
+              </span>
+            </div>
+            <RevenueFlowChart data={collectionsSeries} labels={monthLabels} />
             <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-4'>
-              <div className='rounded-lg border bg-muted/30 p-3'>
+              <div className='rounded-lg border bg-background p-3'>
                 <div className='text-xs text-muted-foreground'>Collections today</div>
-                <div className='text-lg font-semibold'>{formatCurrency(collectionsToday)}</div>
+                <div className='whitespace-normal break-words text-lg font-semibold leading-tight'>{formatCurrency(collectionsToday)}</div>
                 <p className='text-xs text-muted-foreground'>Cashier totals</p>
               </div>
-              <div className='rounded-lg border bg-muted/30 p-3'>
+              <div className='rounded-lg border bg-background p-3'>
                 <div className='text-xs text-muted-foreground'>Collections MTD</div>
-                <div className='text-lg font-semibold'>{formatCurrency(collectionsMTD)}</div>
+                <div className='whitespace-normal break-words text-lg font-semibold leading-tight'>{formatCurrency(collectionsMTD)}</div>
                 <p className='text-xs text-muted-foreground'>
                   {mtdVsAvg === null ? 'Vs 12-mo avg: N/A' : `Vs 12-mo avg: ${formatSignedPercent(mtdVsAvg)}`}
                 </p>
               </div>
-              <div className='rounded-lg border bg-muted/30 p-3'>
+              <div className='rounded-lg border bg-background p-3'>
                 <div className='text-xs text-muted-foreground'>12-mo average</div>
-                <div className='text-lg font-semibold'>{formatCurrency(avgMonthly)}</div>
+                <div className='whitespace-normal break-words text-lg font-semibold leading-tight'>{formatCurrency(avgMonthly)}</div>
                 <p className='text-xs text-muted-foreground'>Monthly baseline</p>
               </div>
-              <div className='rounded-lg border bg-muted/30 p-3'>
+              <div className='rounded-lg border bg-background p-3'>
                 <div className='flex items-center justify-between text-xs text-muted-foreground'>
                   <span>MoM change</span>
                   {momChange === null ? null : momChange >= 0 ? (
@@ -746,7 +716,7 @@ export default function AdminDashboard() {
                     <TrendingDown className='h-3 w-3 text-rose-500' />
                   )}
                 </div>
-                <div className='text-lg font-semibold'>
+                <div className='whitespace-normal break-words text-lg font-semibold leading-tight'>
                   {momChange === null ? 'N/A' : formatSignedPercent(momChange)}
                 </div>
                 <p className='text-xs text-muted-foreground'>Vs previous month</p>
@@ -773,21 +743,21 @@ export default function AdminDashboard() {
           </CardContent>
         </Card>
 
-        <Card className='shadow-sm lg:col-span-5' data-watermark='LIST'>
-          <CardHeader>
+        <Card className='gap-0 rounded-lg py-0 shadow-sm lg:col-span-5' data-watermark='LIST'>
+          <CardHeader className='px-5 pb-0 pt-5'>
             <CardTitle>Finance Reports</CardTitle>
             <CardDescription>Shortcuts to detailed reports</CardDescription>
           </CardHeader>
-          <CardContent className='space-y-4'>
+          <CardContent className='space-y-4 px-5 pb-5 pt-4'>
             <div className='grid gap-3 sm:grid-cols-2'>
-              <div className='rounded-lg border bg-muted/30 p-3'>
+              <div className='rounded-lg border bg-background p-3'>
                 <div className='text-xs text-muted-foreground'>Receivables</div>
-                <div className='text-lg font-semibold'>{formatCurrency(receivables)}</div>
+                <div className='whitespace-normal break-words text-lg font-semibold leading-tight'>{formatCurrency(receivables)}</div>
                 <p className='text-xs text-muted-foreground'>Outstanding balance</p>
               </div>
-              <div className='rounded-lg border bg-muted/30 p-3'>
+              <div className='rounded-lg border bg-background p-3'>
                 <div className='text-xs text-muted-foreground'>Collections MTD</div>
-                <div className='text-lg font-semibold'>{formatCurrency(collectionsMTD)}</div>
+                <div className='whitespace-normal break-words text-lg font-semibold leading-tight'>{formatCurrency(collectionsMTD)}</div>
                 <p className='text-xs text-muted-foreground'>Month-to-date</p>
               </div>
             </div>
@@ -804,8 +774,8 @@ export default function AdminDashboard() {
             </div>
           </CardContent>
         </Card>
-        <Card className='shadow-sm lg:col-span-7' data-watermark='REG'>
-          <CardHeader className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+        <Card className='gap-0 rounded-lg py-0 shadow-sm lg:col-span-7' data-watermark='REG'>
+          <CardHeader className='flex flex-col gap-2 px-5 pb-0 pt-5 sm:flex-row sm:items-center sm:justify-between'>
             <div>
               <CardTitle>Registrar Insights</CardTitle>
               <CardDescription>Enrollment status and student mix</CardDescription>
@@ -814,21 +784,21 @@ export default function AdminDashboard() {
               <Link to='/admin/registrar/enrollment-summary'>Enrollment report</Link>
             </Button>
           </CardHeader>
-          <CardContent className='space-y-4'>
+          <CardContent className='space-y-4 px-5 pb-5 pt-4'>
             <div className='grid gap-3 sm:grid-cols-3'>
-              <div className='rounded-lg border bg-muted/30 p-3'>
+              <div className='rounded-lg border bg-background p-3'>
                 <div className='text-xs text-muted-foreground'>Enrolled students</div>
-                <div className='text-lg font-semibold'>{formatNumber(enrolledStudents)}</div>
+                <div className='whitespace-normal break-words text-lg font-semibold leading-tight'>{formatNumber(enrolledStudents)}</div>
                 <p className='text-xs text-muted-foreground'>Active enrollments</p>
               </div>
-              <div className='rounded-lg border bg-muted/30 p-3'>
+              <div className='rounded-lg border bg-background p-3'>
                 <div className='text-xs text-muted-foreground'>Pending enrollments</div>
-                <div className='text-lg font-semibold'>{formatNumber(pendingEnrollments)}</div>
+                <div className='whitespace-normal break-words text-lg font-semibold leading-tight'>{formatNumber(pendingEnrollments)}</div>
                 <p className='text-xs text-muted-foreground'>Awaiting confirmation</p>
               </div>
-              <div className='rounded-lg border bg-muted/30 p-3'>
+              <div className='rounded-lg border bg-background p-3'>
                 <div className='text-xs text-muted-foreground'>Enrollment rate</div>
-                <div className='text-lg font-semibold'>{formatPercent(enrollmentRate)}</div>
+                <div className='whitespace-normal break-words text-lg font-semibold leading-tight'>{formatPercent(enrollmentRate)}</div>
                 <p className='text-xs text-muted-foreground'>Share of total</p>
               </div>
             </div>
@@ -852,8 +822,8 @@ export default function AdminDashboard() {
           </CardContent>
         </Card>
 
-        <Card className='shadow-sm lg:col-span-5' data-watermark='HR'>
-          <CardHeader className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+        <Card className='gap-0 rounded-lg py-0 shadow-sm lg:col-span-5' data-watermark='HR'>
+          <CardHeader className='flex flex-col gap-2 px-5 pb-0 pt-5 sm:flex-row sm:items-center sm:justify-between'>
             <div>
               <CardTitle>HR Snapshot</CardTitle>
               <CardDescription>Headcount and department mix</CardDescription>
@@ -862,13 +832,13 @@ export default function AdminDashboard() {
               <Link to='/admin/hr/employee-profile'>View HR</Link>
             </Button>
           </CardHeader>
-          <CardContent className='space-y-4'>
+          <CardContent className='space-y-4 px-5 pb-5 pt-4'>
             <div className='flex items-center justify-between gap-3'>
               <div>
-                <div className='text-2xl font-bold'>{formatNumber(employees)}</div>
+                <div className='whitespace-normal break-words text-2xl font-bold leading-tight'>{formatNumber(employees)}</div>
                 <p className='text-xs text-muted-foreground'>Active employees</p>
               </div>
-              <div className='rounded-lg border bg-muted/30 p-3 text-right'>
+              <div className='rounded-lg border bg-background p-3 text-right'>
                 <div className='text-xs text-muted-foreground'>Largest department</div>
                 <div className='text-sm font-semibold'>{topDepartment?.label || 'N/A'}</div>
                 <div className='text-xs text-muted-foreground'>
@@ -900,8 +870,8 @@ export default function AdminDashboard() {
             </div>
           </CardContent>
         </Card>
-        <Card className='shadow-sm lg:col-span-7' data-watermark='EVENT'>
-          <CardHeader className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+        <Card className='gap-0 rounded-lg py-0 shadow-sm lg:col-span-7' data-watermark='EVENT'>
+          <CardHeader className='flex flex-col gap-2 px-5 pb-0 pt-5 sm:flex-row sm:items-center sm:justify-between'>
             <div>
               <CardTitle>Communications</CardTitle>
               <CardDescription>Events, memos, and announcements</CardDescription>
@@ -911,7 +881,7 @@ export default function AdminDashboard() {
               <Badge variant='secondary'>{formatNumber(memosThisWeek)} memos</Badge>
             </div>
           </CardHeader>
-          <CardContent className='grid gap-4 md:grid-cols-2'>
+          <CardContent className='grid gap-4 px-5 pb-5 pt-4 md:grid-cols-2'>
             <div className='space-y-3'>
               <div className='flex items-center justify-between'>
                 <p className='text-sm font-medium'>Upcoming events</p>
@@ -920,14 +890,14 @@ export default function AdminDashboard() {
                 </Button>
               </div>
               {(data.lists.events || []).length === 0 ? (
-                <div className='rounded-md border bg-muted/30 p-4 text-center'>
+                <div className='rounded-lg border bg-background p-4 text-center'>
                   <p className='text-sm text-muted-foreground'>No upcoming events</p>
                 </div>
               ) : (
                 (data.lists.events || []).map((event) => (
                   <div
                     key={event.id}
-                    className='flex items-start gap-3 rounded-lg border bg-muted/20 p-3 transition-colors hover:bg-muted/40'
+                    className='flex items-start gap-3 rounded-lg border bg-background p-3 transition-colors hover:bg-muted/30'
                   >
                     <CalendarDays className='mt-0.5 h-4 w-4 text-primary' />
                     <div className='flex-1 space-y-1 min-w-0'>
@@ -952,14 +922,14 @@ export default function AdminDashboard() {
                 </Button>
               </div>
               {(data.lists.memos || []).length === 0 ? (
-                <div className='rounded-md border bg-muted/30 p-4 text-center'>
+                <div className='rounded-lg border bg-background p-4 text-center'>
                   <p className='text-sm text-muted-foreground'>No recent memos</p>
                 </div>
               ) : (
                 (data.lists.memos || []).map((memo) => (
                   <div
                     key={memo.id}
-                    className='flex items-start gap-3 rounded-lg border bg-muted/20 p-3 transition-colors hover:bg-muted/40'
+                    className='flex items-start gap-3 rounded-lg border bg-background p-3 transition-colors hover:bg-muted/30'
                   >
                     <Megaphone className='mt-0.5 h-4 w-4 text-primary' />
                     <div className='flex-1 space-y-1 min-w-0'>
@@ -977,12 +947,12 @@ export default function AdminDashboard() {
           </CardContent>
         </Card>
 
-        <Card className='shadow-sm lg:col-span-5' data-watermark='STAT'>
-          <CardHeader>
+        <Card className='gap-0 rounded-lg py-0 shadow-sm lg:col-span-5' data-watermark='STAT'>
+          <CardHeader className='px-5 pb-0 pt-5'>
             <CardTitle>Operational Signals</CardTitle>
             <CardDescription>Enrollment pressure and cash coverage</CardDescription>
           </CardHeader>
-          <CardContent className='space-y-4'>
+          <CardContent className='space-y-4 px-5 pb-5 pt-4'>
             <div className='grid gap-4 sm:grid-cols-3'>
               <ProgressRing value={enrollmentRate} max={100} label='Enrollment rate' size={90} />
               <ProgressRing value={pendingRate} max={100} label='Pending share' size={90} />
