@@ -97,6 +97,12 @@ const parseIdParam = (value) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const BASIC_ED_PROGRAM_IDS = new Set([2, 3, 4]);
+
+const isBasicEdStudent = (student = {}) => {
+  return BASIC_ED_PROGRAM_IDS.has(Number(student.acadprog_id));
+};
+
 const parseSelectedDateRange = (value) => {
   if (!value || typeof value !== 'string') {
     return { dateFrom: null, dateTo: null };
@@ -177,7 +183,7 @@ const calculateStudentTotalsFromLedger = async (db, student, syid, semid, school
       WHERE studid = ? AND syid = ? AND deleted = '0'
     `;
 
-    if (semid !== null && semid !== undefined) {
+    if (!isBasicEdStudent(student) && semid !== null && semid !== undefined) {
       query += ' AND semid = ?';
       params.push(semid);
     }
@@ -259,7 +265,9 @@ const hasStudledgerEntries = async (db, studid, syid) => {
  *
  * @param {object} dateRange - Optional { dateFrom, dateTo } for filtering by createddatetime
  */
-const getBulkStudentBalancesFromLedger = async (db, studentIds, syid, semid, schoolInfo, dateRange = {}) => {
+const getBulkStudentBalancesFromLedger = async (db, students, syid, semid, schoolInfo, dateRange = {}) => {
+  const studentIds = students.map((student) => student.id);
+
   if (!studentIds.length || !syid) {
     return new Map();
   }
@@ -281,8 +289,23 @@ const getBulkStudentBalancesFromLedger = async (db, studentIds, syid, semid, sch
     `;
 
     if (semid !== null && semid !== undefined) {
-      query += ' AND sl.semid = ?';
-      params.push(semid);
+      const semesterStudentIds = students
+        .filter((student) => !isBasicEdStudent(student))
+        .map((student) => student.id);
+
+      if (semesterStudentIds.length === studentIds.length) {
+        query += ' AND sl.semid = ?';
+        params.push(semid);
+      } else if (semesterStudentIds.length > 0) {
+        const semesterPlaceholders = semesterStudentIds.map(() => '?').join(',');
+        query += `
+          AND (
+            sl.studid NOT IN (${semesterPlaceholders})
+            OR (sl.studid IN (${semesterPlaceholders}) AND sl.semid = ?)
+          )
+        `;
+        params.push(...semesterStudentIds, ...semesterStudentIds, semid);
+      }
     }
 
     // Apply date range filter (matches PHP: filter by createddatetime)
@@ -337,10 +360,8 @@ const getStudentsWithBalancesBulk = async (db, students, syid, semid, schoolInfo
     return [];
   }
 
-  const studentIds = students.map((s) => s.id);
-
   // Get all balances in one query
-  const balanceMap = await getBulkStudentBalancesFromLedger(db, studentIds, syid, semid, schoolInfo, dateRange);
+  const balanceMap = await getBulkStudentBalancesFromLedger(db, students, syid, semid, schoolInfo, dateRange);
 
   // Merge student data with balances
   const result = [];
@@ -367,6 +388,21 @@ const getStudentsWithBalancesBulk = async (db, students, syid, semid, schoolInfo
   }
 
   return result;
+};
+
+const hasReceivableActivity = (student) => {
+  return [
+    student.total_fees,
+    student.discount,
+    student.net_assessed,
+    student.total_paid,
+    student.balance,
+    student.overpayment,
+  ].some((value) => toNumber(value) !== 0);
+};
+
+const filterStudentsWithReceivableActivity = (students = []) => {
+  return students.filter(hasReceivableActivity);
 };
 
 const tuitionDetailColumnCache = new Map();
@@ -1438,7 +1474,8 @@ export const getAccountReceivableSummary = async (req, res) => {
       filters.dateRange
     );
 
-    const aggregated = buildSummary(studentsWithTotals);
+    const activeReceivableStudents = filterStudentsWithReceivableActivity(studentsWithTotals);
+    const aggregated = buildSummary(activeReceivableStudents);
 
     // Skip bySchoolYear comparison for now (it's slow and optional)
     // Can be loaded separately if needed
@@ -1517,7 +1554,9 @@ export const getAccountReceivableList = async (req, res) => {
       filters.dateRange
     );
 
-    const listRows = studentsWithTotals.map((student) => {
+    const activeReceivableStudents = filterStudentsWithReceivableActivity(studentsWithTotals);
+
+    const listRows = activeReceivableStudents.map((student) => {
       const lastName = student.lastname || '';
       const firstMiddle = [student.firstname, student.middlename].filter(Boolean).join(' ');
       const fullName =
@@ -3127,7 +3166,8 @@ export const getFinanceV1ReceivableSummaryTotals = async ({
       filters.dateRange
     );
 
-    const aggregated = buildSummary(studentsWithTotals);
+    const activeReceivableStudents = filterStudentsWithReceivableActivity(studentsWithTotals);
+    const aggregated = buildSummary(activeReceivableStudents);
     aggregated.appliedDateRange = filters.dateRange;
     return aggregated;
   } catch (error) {
