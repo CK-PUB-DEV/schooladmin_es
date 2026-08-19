@@ -18,10 +18,32 @@ const getSchoolConnection = async (schoolDbConfig) => {
   return connection;
 };
 
+const ACTIVE_ENROLLMENT_STATUSES = [1, 2, 4];
+const ACTIVE_STATUS_SQL = ACTIVE_ENROLLMENT_STATUSES.join(', ');
+
+const normalizeId = (value, fallback = 0) => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) ? fallback : parsed;
+};
+
+const buildStatusCounts = (table) => `
+  SELECT
+    COALESCE(SUM(CASE WHEN studstatus IN (${ACTIVE_STATUS_SQL}) THEN 1 ELSE 0 END), 0) as total,
+    COALESCE(SUM(CASE WHEN studstatus = 1 THEN 1 ELSE 0 END), 0) as enrolled,
+    COALESCE(SUM(CASE WHEN studstatus = 2 THEN 1 ELSE 0 END), 0) as late_enrollment,
+    COALESCE(SUM(CASE WHEN studstatus = 4 THEN 1 ELSE 0 END), 0) as transferred_in,
+    COALESCE(SUM(CASE WHEN studstatus = 3 THEN 1 ELSE 0 END), 0) as dropped_out,
+    COALESCE(SUM(CASE WHEN studstatus = 5 THEN 1 ELSE 0 END), 0) as transferred_out,
+    COALESCE(SUM(CASE WHEN studstatus = 6 THEN 1 ELSE 0 END), 0) as withdrawn,
+    COALESCE(SUM(CASE WHEN studstatus = 7 THEN 1 ELSE 0 END), 0) as deceased
+  FROM ${table}
+`;
+
 // Get enrollment summary statistics
 export const getEnrollmentSummary = async (req, res) => {
+  let schoolDb;
   try {
-    const { schoolDbConfig } = req.body;
+    const { schoolDbConfig, syid, semid } = req.body;
 
     if (!schoolDbConfig) {
       return res.status(400).json({
@@ -30,7 +52,7 @@ export const getEnrollmentSummary = async (req, res) => {
       });
     }
 
-    const schoolDb = await getSchoolConnection(schoolDbConfig);
+    schoolDb = await getSchoolConnection(schoolDbConfig);
 
     // Get active school year and semester
     const [activeSchoolYear] = await schoolDb.execute(
@@ -41,23 +63,23 @@ export const getEnrollmentSummary = async (req, res) => {
       'SELECT * FROM semester WHERE isactive = 1 LIMIT 1'
     );
 
-    const activeSyId = activeSchoolYear[0]?.id || 0;
-    const activeSemId = activeSemester[0]?.id || 0;
+    const activeSyId = normalizeId(syid, activeSchoolYear[0]?.id || 0);
+    const activeSemId = normalizeId(semid, activeSemester[0]?.id || 0);
+
+    const [selectedSchoolYear] = await schoolDb.execute(
+      'SELECT * FROM sy WHERE id = ? LIMIT 1',
+      [activeSyId]
+    );
+
+    const [selectedSemester] = await schoolDb.execute(
+      'SELECT * FROM semester WHERE id = ? LIMIT 1',
+      [activeSemId]
+    );
 
     const [programRows] = await schoolDb.execute(
       'SELECT id, progname FROM academicprogram WHERE id IN (2, 3, 4, 5, 6)'
     );
     const programMap = new Map(programRows.map((row) => [row.id, row.progname]));
-
-    const buildStatusCounts = (table) => `
-      SELECT
-        COUNT(*) as total,
-        SUM(CASE WHEN studstatus = 1 THEN 1 ELSE 0 END) as enrolled,
-        SUM(CASE WHEN studstatus = 2 THEN 1 ELSE 0 END) as late_enrollment,
-        SUM(CASE WHEN studstatus = 3 THEN 1 ELSE 0 END) as dropped_out,
-        SUM(CASE WHEN studstatus = 6 THEN 1 ELSE 0 END) as withdrawn
-      FROM ${table}
-    `;
 
     const [kindergartenCount] = await schoolDb.execute(
       `${buildStatusCounts('enrolledstud')} e
@@ -82,13 +104,7 @@ export const getEnrollmentSummary = async (req, res) => {
 
     // Get enrollment counts by level
     const [gradeSchoolCount] = await schoolDb.execute(
-      `SELECT
-        COUNT(*) as total,
-        SUM(CASE WHEN studstatus = 1 THEN 1 ELSE 0 END) as enrolled,
-        SUM(CASE WHEN studstatus = 2 THEN 1 ELSE 0 END) as late_enrollment,
-        SUM(CASE WHEN studstatus = 3 THEN 1 ELSE 0 END) as dropped_out,
-        SUM(CASE WHEN studstatus = 6 THEN 1 ELSE 0 END) as withdrawn
-      FROM enrolledstud
+      `${buildStatusCounts('enrolledstud')}
       WHERE deleted = 0 AND syid = ?`,
       [activeSyId]
     );
@@ -96,7 +112,10 @@ export const getEnrollmentSummary = async (req, res) => {
     const [shsCount] = await schoolDb.execute(
       `${buildStatusCounts('sh_enrolledstud')} e
        LEFT JOIN gradelevel l ON e.levelid = l.id
-       WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ? AND l.acadprogid = 5`,
+       WHERE e.deleted = 0
+         AND e.syid = ?
+         AND (e.semid = ? OR e.semid IS NULL)
+         AND l.acadprogid = 5`,
       [activeSyId, activeSemId]
     );
 
@@ -114,7 +133,7 @@ export const getEnrollmentSummary = async (req, res) => {
         COUNT(e.id) as count
       FROM enrolledstud e
       LEFT JOIN gradelevel l ON e.levelid = l.id
-      WHERE e.deleted = 0 AND e.syid = ?
+      WHERE e.deleted = 0 AND e.syid = ? AND e.studstatus IN (${ACTIVE_STATUS_SQL})
       GROUP BY e.levelid, l.levelname, l.id
       ORDER BY l.sortid`,
       [activeSyId]
@@ -128,7 +147,10 @@ export const getEnrollmentSummary = async (req, res) => {
         COUNT(e.id) as count
       FROM sh_enrolledstud e
       LEFT JOIN sh_strand s ON e.strandid = s.id
-      WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ?
+      WHERE e.deleted = 0
+        AND e.syid = ?
+        AND (e.semid = ? OR e.semid IS NULL)
+        AND e.studstatus IN (${ACTIVE_STATUS_SQL})
       GROUP BY e.strandid, s.strandname, s.id
       ORDER BY s.strandname`,
       [activeSyId, activeSemId]
@@ -137,14 +159,20 @@ export const getEnrollmentSummary = async (req, res) => {
     // Get enrollment by course (for college)
     const [collegeByYearLevel] = await schoolDb.execute(
       `SELECT
-        c.coursedesc as course_name,
+        COALESCE(c.coursedesc, c.courseDesc, c.courseabrv, 'N/A') as course_name,
+        gl.levelname as year_level_name,
         e.yearLevel,
         COUNT(e.id) as count
       FROM college_enrolledstud e
-      LEFT JOIN college_courses c ON e.courseid = c.id
-      WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ?
-      GROUP BY e.courseid, c.coursedesc, e.yearLevel
-      ORDER BY c.coursedesc, e.yearLevel`,
+      LEFT JOIN college_sections sec ON e.sectionID = sec.id
+      LEFT JOIN college_courses c ON COALESCE(sec.courseid, e.courseid) = c.id
+      LEFT JOIN gradelevel gl ON e.yearLevel = gl.id
+      WHERE e.deleted = 0
+        AND e.syid = ?
+        AND e.semid = ?
+        AND e.studstatus IN (${ACTIVE_STATUS_SQL})
+      GROUP BY COALESCE(sec.courseid, e.courseid), c.coursedesc, c.courseDesc, c.courseabrv, e.yearLevel, gl.levelname
+      ORDER BY c.coursedesc, c.courseDesc, c.courseabrv, gl.sortid, e.yearLevel`,
       [activeSyId, activeSemId]
     );
 
@@ -162,7 +190,7 @@ export const getEnrollmentSummary = async (req, res) => {
           COALESCE(l.sortid, 0) as sort_order
         FROM enrolledstud e
         LEFT JOIN gradelevel l ON e.levelid = l.id
-        WHERE e.deleted = 0 AND e.syid = ?
+        WHERE e.deleted = 0 AND e.syid = ? AND e.studstatus IN (${ACTIVE_STATUS_SQL})
         GROUP BY e.levelid, l.levelname, l.sortid
 
         UNION ALL
@@ -174,32 +202,38 @@ export const getEnrollmentSummary = async (req, res) => {
           COALESCE(l.sortid, 0) as sort_order
         FROM sh_enrolledstud e
         LEFT JOIN gradelevel l ON e.levelid = l.id
-        WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ?
+        WHERE e.deleted = 0
+          AND e.syid = ?
+          AND (e.semid = ? OR e.semid IS NULL)
+          AND e.studstatus IN (${ACTIVE_STATUS_SQL})
         GROUP BY e.levelid, l.levelname, l.sortid
 
         UNION ALL
 
         SELECT
-          CONCAT('Year ', e.yearLevel, ' College') as level_name,
+          COALESCE(l.levelname, CONCAT('Level ', e.yearLevel)) as level_name,
           e.yearLevel as level_id,
           COUNT(e.id) as level_count,
-          100 + COALESCE(e.yearLevel, 0) as sort_order
+          COALESCE(l.sortid, 100 + COALESCE(e.yearLevel, 0)) as sort_order
         FROM college_enrolledstud e
-        WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ? AND e.yearLevel IS NOT NULL
-        GROUP BY e.yearLevel
+        LEFT JOIN gradelevel l ON e.yearLevel = l.id
+        WHERE e.deleted = 0
+          AND e.syid = ?
+          AND e.semid = ?
+          AND e.studstatus IN (${ACTIVE_STATUS_SQL})
+          AND e.yearLevel IS NOT NULL
+        GROUP BY e.yearLevel, l.levelname, l.sortid
       ) as levels
       GROUP BY level_name, level_id, sort_order
       ORDER BY sort_order, level_name`,
       [activeSyId, activeSyId, activeSemId, activeSyId, activeSemId]
     );
 
-    await schoolDb.end();
-
     res.status(200).json({
       status: 'success',
       data: {
-        activeSchoolYear: activeSchoolYear[0] || null,
-        activeSemester: activeSemester[0] || null,
+        activeSchoolYear: selectedSchoolYear[0] || activeSchoolYear[0] || null,
+        activeSemester: selectedSemester[0] || activeSemester[0] || null,
         summary: {
           kindergarten: {
             ...kindergartenCount[0],
@@ -238,11 +272,16 @@ export const getEnrollmentSummary = async (req, res) => {
       message: 'Failed to fetch enrollment summary',
       error: error.message,
     });
+  } finally {
+    if (schoolDb) {
+      await schoolDb.end();
+    }
   }
 };
 
 // Get detailed enrollment list
 export const getEnrollmentList = async (req, res) => {
+  let schoolDb;
   try {
     const { schoolDbConfig, level, syid, semid } = req.body;
 
@@ -253,7 +292,7 @@ export const getEnrollmentList = async (req, res) => {
       });
     }
 
-    const schoolDb = await getSchoolConnection(schoolDbConfig);
+    schoolDb = await getSchoolConnection(schoolDbConfig);
 
     let query = '';
     let params = [];
@@ -275,7 +314,7 @@ export const getEnrollmentList = async (req, res) => {
         LEFT JOIN gradelevel l ON e.levelid = l.id
         LEFT JOIN sections sec ON e.sectionid = sec.id
         LEFT JOIN studentstatus st ON e.studstatus = st.id
-        WHERE e.deleted = 0 AND e.syid = ?
+        WHERE e.deleted = 0 AND e.syid = ? AND e.studstatus IN (${ACTIVE_STATUS_SQL})
         ORDER BY l.sortid, sec.sectionname, s.lastname, s.firstname
       `;
       params = [syid];
@@ -298,7 +337,10 @@ export const getEnrollmentList = async (req, res) => {
         LEFT JOIN sh_strand str ON e.strandid = str.id
         LEFT JOIN sections sec ON e.sectionid = sec.id
         LEFT JOIN studentstatus st ON e.studstatus = st.id
-        WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ?
+        WHERE e.deleted = 0
+          AND e.syid = ?
+          AND (e.semid = ? OR e.semid IS NULL)
+          AND e.studstatus IN (${ACTIVE_STATUS_SQL})
         ORDER BY l.sortid, str.strandname, sec.sectionname, s.lastname, s.firstname
       `;
       params = [syid, semid];
@@ -310,18 +352,22 @@ export const getEnrollmentList = async (req, res) => {
           s.sid as student_number,
           CONCAT(s.lastname, ', ', s.firstname, ' ', IFNULL(s.middlename, '')) as full_name,
           s.gender,
-          CONCAT('Year ', e.yearLevel) as year_level,
-          c.coursedesc as course,
+          COALESCE(l.levelname, CONCAT('Level ', e.yearLevel)) as year_level,
+          COALESCE(c.coursedesc, c.courseDesc, c.courseabrv, 'N/A') as course,
           sec.sectionDesc as section,
           st.description as status,
           e.date_enrolled as dateenrolled
         FROM college_enrolledstud e
         LEFT JOIN studinfo s ON e.studid = s.id
-        LEFT JOIN college_courses c ON e.courseid = c.id
         LEFT JOIN college_sections sec ON e.sectionID = sec.id
+        LEFT JOIN college_courses c ON COALESCE(sec.courseid, e.courseid) = c.id
+        LEFT JOIN gradelevel l ON e.yearLevel = l.id
         LEFT JOIN studentstatus st ON e.studstatus = st.id
-        WHERE e.deleted = 0 AND e.syid = ? AND e.semid = ?
-        ORDER BY c.coursedesc, e.yearLevel, s.lastname, s.firstname
+        WHERE e.deleted = 0
+          AND e.syid = ?
+          AND e.semid = ?
+          AND e.studstatus IN (${ACTIVE_STATUS_SQL})
+        ORDER BY c.coursedesc, c.courseDesc, c.courseabrv, l.sortid, s.lastname, s.firstname
       `;
       params = [syid, semid];
     } else {
@@ -334,8 +380,6 @@ export const getEnrollmentList = async (req, res) => {
 
     const [enrollments] = await schoolDb.execute(query, params);
 
-    await schoolDb.end();
-
     res.status(200).json({
       status: 'success',
       data: enrollments,
@@ -347,6 +391,10 @@ export const getEnrollmentList = async (req, res) => {
       message: 'Failed to fetch enrollment list',
       error: error.message,
     });
+  } finally {
+    if (schoolDb) {
+      await schoolDb.end();
+    }
   }
 };
 

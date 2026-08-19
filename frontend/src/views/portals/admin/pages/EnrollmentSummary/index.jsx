@@ -1,15 +1,14 @@
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { apiUrl } from '../../../../../lib/api';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../../../../components/ui/card';
+import { Card, CardContent } from '../../../../../components/ui/card';
 import { Button } from '../../../../../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../../../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../../../../components/ui/tabs';
 import { Badge } from '../../../../../components/ui/badge';
-import { Separator } from '../../../../../components/ui/separator';
 import { EnrollmentStats } from './components/enrollment-stats';
 import { EnrollmentTable } from './components/enrollment-table';
-import { RefreshCcw, Download, Users, GraduationCap, BookOpen } from 'lucide-react';
+import { RefreshCcw, Users, GraduationCap, BookOpen } from 'lucide-react';
 
 export default function EnrollmentSummary() {
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -44,16 +43,33 @@ export default function EnrollmentSummary() {
     fetchSemesters();
   }, []);
 
-  // Fetch enrollment list when filters change
+  // Fetch summary and enrollment list when filters change
+  useEffect(() => {
+    if (selectedSy && (activeTab === 'gradeschool' || selectedSem)) {
+      fetchEnrollmentSummary({ syncDefaults: false });
+    }
+  }, [selectedSy, selectedSem]);
+
   useEffect(() => {
     if (selectedSy && (activeTab === 'gradeschool' || selectedSem)) {
       fetchEnrollmentList();
     }
   }, [activeTab, selectedSy, selectedSem]);
 
-  const fetchEnrollmentSummary = async () => {
+  const fetchEnrollmentSummary = async ({ syncDefaults = true } = {}) => {
     try {
       setSummaryLoading(true);
+      const payload = {
+        schoolDbConfig,
+      };
+
+      if (selectedSy) {
+        payload.syid = selectedSy;
+      }
+      if (selectedSem) {
+        payload.semid = selectedSem;
+      }
+
       const response = await fetch(apiUrl('/api/admin/enrollment/summary'), {
         method: 'POST',
         headers: {
@@ -61,18 +77,17 @@ export default function EnrollmentSummary() {
           Authorization: `Bearer ${token}`,
         },
         credentials: 'include',
-        body: JSON.stringify({ schoolDbConfig }),
+        body: JSON.stringify(payload),
       });
 
       const result = await response.json();
 
       if (response.ok && result.status === 'success') {
         setSummaryData(result.data);
-        // Set default selections
-        if (result.data.activeSchoolYear) {
+        if (syncDefaults && result.data.activeSchoolYear) {
           setSelectedSy(result.data.activeSchoolYear.id.toString());
         }
-        if (result.data.activeSemester) {
+        if (syncDefaults && result.data.activeSemester) {
           setSelectedSem(result.data.activeSemester.id.toString());
         }
       } else {
@@ -163,36 +178,6 @@ export default function EnrollmentSummary() {
     }
   };
 
-  const handleExportData = () => {
-    if (!enrollmentList || enrollmentList.length === 0) {
-      toast.error('No data to export');
-      return;
-    }
-
-    const csvContent = convertToCSV(enrollmentList);
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-
-    link.setAttribute('href', url);
-    link.setAttribute('download', `enrollment_${activeTab}_${Date.now()}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    toast.success('Data exported successfully');
-  };
-
-  const convertToCSV = (data) => {
-    if (!data || data.length === 0) return '';
-
-    const headers = Object.keys(data[0]).join(',');
-    const rows = data.map((row) => Object.values(row).map((val) => `"${val || ''}"`).join(','));
-
-    return [headers, ...rows].join('\n');
-  };
-
   return (
     <div className="space-y-4 p-6">
       {/* Header */}
@@ -210,7 +195,11 @@ export default function EnrollmentSummary() {
               Updating...
             </div>
           )}
-          <Button variant="outline" size="sm" onClick={fetchEnrollmentSummary}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => fetchEnrollmentSummary({ syncDefaults: false })}
+          >
             <RefreshCcw className="h-4 w-4 mr-2" />
             Refresh
           </Button>

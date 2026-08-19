@@ -24,6 +24,7 @@ export function EnrollmentStats({ summary, breakdown }) {
       total: toNumber(kindergarten?.total),
       enrolled: toNumber(kindergarten?.enrolled),
       late: toNumber(kindergarten?.late_enrollment),
+      transferredIn: toNumber(kindergarten?.transferred_in),
       dropped: toNumber(kindergarten?.dropped_out),
       withdrawn: toNumber(kindergarten?.withdrawn),
       colors: {
@@ -41,6 +42,7 @@ export function EnrollmentStats({ summary, breakdown }) {
       total: toNumber(elementary?.total),
       enrolled: toNumber(elementary?.enrolled),
       late: toNumber(elementary?.late_enrollment),
+      transferredIn: toNumber(elementary?.transferred_in),
       dropped: toNumber(elementary?.dropped_out),
       withdrawn: toNumber(elementary?.withdrawn),
       colors: {
@@ -58,6 +60,7 @@ export function EnrollmentStats({ summary, breakdown }) {
       total: toNumber(highSchool?.total),
       enrolled: toNumber(highSchool?.enrolled),
       late: toNumber(highSchool?.late_enrollment),
+      transferredIn: toNumber(highSchool?.transferred_in),
       dropped: toNumber(highSchool?.dropped_out),
       withdrawn: toNumber(highSchool?.withdrawn),
       colors: {
@@ -75,6 +78,7 @@ export function EnrollmentStats({ summary, breakdown }) {
       total: toNumber(shs?.total),
       enrolled: toNumber(shs?.enrolled),
       late: toNumber(shs?.late_enrollment),
+      transferredIn: toNumber(shs?.transferred_in),
       dropped: toNumber(shs?.dropped_out),
       withdrawn: toNumber(shs?.withdrawn),
       colors: {
@@ -92,6 +96,7 @@ export function EnrollmentStats({ summary, breakdown }) {
       total: toNumber(college?.total),
       enrolled: toNumber(college?.enrolled),
       late: toNumber(college?.late_enrollment),
+      transferredIn: toNumber(college?.transferred_in),
       dropped: toNumber(college?.dropped_out),
       withdrawn: toNumber(college?.withdrawn),
       colors: {
@@ -112,6 +117,7 @@ export function EnrollmentStats({ summary, breakdown }) {
       total: toNumber(gradeSchool?.total),
       enrolled: toNumber(gradeSchool?.enrolled),
       late: toNumber(gradeSchool?.late_enrollment),
+      transferredIn: toNumber(gradeSchool?.transferred_in),
       dropped: toNumber(gradeSchool?.dropped_out),
       withdrawn: toNumber(gradeSchool?.withdrawn),
       colors: {
@@ -129,6 +135,7 @@ export function EnrollmentStats({ summary, breakdown }) {
       total: toNumber(shs?.total),
       enrolled: toNumber(shs?.enrolled),
       late: toNumber(shs?.late_enrollment),
+      transferredIn: toNumber(shs?.transferred_in),
       dropped: toNumber(shs?.dropped_out),
       withdrawn: toNumber(shs?.withdrawn),
       colors: {
@@ -146,6 +153,7 @@ export function EnrollmentStats({ summary, breakdown }) {
       total: toNumber(college?.total),
       enrolled: toNumber(college?.enrolled),
       late: toNumber(college?.late_enrollment),
+      transferredIn: toNumber(college?.transferred_in),
       dropped: toNumber(college?.dropped_out),
       withdrawn: toNumber(college?.withdrawn),
       colors: {
@@ -172,6 +180,7 @@ export function EnrollmentStats({ summary, breakdown }) {
     items: [
       { label: 'Enrolled', value: level.enrolled, variant: 'success' },
       { label: 'Late Enrollment', value: level.late, variant: 'warning' },
+      { label: 'Transferred In', value: level.transferredIn, variant: 'info' },
       { label: 'Dropped Out', value: level.dropped, variant: 'danger' },
       { label: 'Withdrawn', value: level.withdrawn, variant: 'secondary' },
     ],
@@ -282,6 +291,7 @@ export function EnrollmentStats({ summary, breakdown }) {
                   {[
                     { label: 'Enrolled', value: level.enrolled },
                     { label: 'Late', value: level.late },
+                    { label: 'Trans. In', value: level.transferredIn },
                     { label: 'Dropped', value: level.dropped },
                     { label: 'Withdrawn', value: level.withdrawn },
                   ].map((item) => (
@@ -375,6 +385,7 @@ function StatusItem({ label, value, total, variant }) {
   const variantColors = {
     success: 'bg-green-500',
     warning: 'bg-yellow-500',
+    info: 'bg-blue-500',
     danger: 'bg-red-500',
     secondary: 'bg-gray-500',
   };
