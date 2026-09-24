@@ -1,11 +1,24 @@
 import mysql from 'mysql2/promise'
 import db from '../config/db.js'
 
+// Returns null for empty, undefined for invalid, else the URL without trailing slashes.
+const normalizeAppUrl = (value) => {
+  const trimmed = String(value ?? '').trim()
+  if (!trimmed) return null
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined
+  } catch {
+    return undefined
+  }
+  return trimmed.replace(/\/+$/, '')
+}
+
 // Get all schools
 export const getAllSchools = async (req, res) => {
   try {
     const [schools] = await db.query(
-      'SELECT id, school_name, abbrv, image_logo, address, finance_v1, db_host, db_port, db_name, db_username, created_at, updated_at FROM schools ORDER BY created_at DESC'
+      'SELECT id, school_name, abbrv, image_logo, address, finance_v1, app_url, db_host, db_port, db_name, db_username, created_at, updated_at FROM schools ORDER BY created_at DESC'
     )
 
     res.status(200).json({
@@ -27,7 +40,7 @@ export const getSchoolById = async (req, res) => {
     const { id } = req.params
 
     const [schools] = await db.query(
-      'SELECT id, school_name, abbrv, image_logo, address, finance_v1, db_host, db_port, db_name, db_username, created_at, updated_at FROM schools WHERE id = ?',
+      'SELECT id, school_name, abbrv, image_logo, address, finance_v1, app_url, db_host, db_port, db_name, db_username, created_at, updated_at FROM schools WHERE id = ?',
       [id]
     )
 
@@ -65,6 +78,7 @@ export const createSchool = async (req, res) => {
       db_host,
       db_port,
       finance_v1,
+      app_url,
     } = req.body
 
     // Validate required fields (password is optional)
@@ -72,6 +86,14 @@ export const createSchool = async (req, res) => {
       return res.status(400).json({
         status: 'error',
         message: 'School name, database name, and username are required',
+      })
+    }
+
+    const resolvedAppUrl = normalizeAppUrl(app_url)
+    if (resolvedAppUrl === undefined) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'School URL must be a valid http(s) URL',
       })
     }
 
@@ -98,13 +120,14 @@ export const createSchool = async (req, res) => {
 
     // Insert new school (password, abbrv, image_logo, address can be empty)
     const [result] = await db.query(
-      'INSERT INTO schools (school_name, abbrv, image_logo, address, finance_v1, db_host, db_port, db_name, db_username, db_password, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())',
+      'INSERT INTO schools (school_name, abbrv, image_logo, address, finance_v1, app_url, db_host, db_port, db_name, db_username, db_password, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())',
       [
         school_name,
         abbrv || '',
         image_logo || '',
         address || '',
         resolvedFinanceV1,
+        resolvedAppUrl,
         resolvedHost,
         resolvedPort,
         db_name,
@@ -123,6 +146,7 @@ export const createSchool = async (req, res) => {
         image_logo,
         address,
         finance_v1: resolvedFinanceV1,
+        app_url: resolvedAppUrl,
         db_host: resolvedHost,
         db_port: resolvedPort,
         db_name,
@@ -153,6 +177,7 @@ export const updateSchool = async (req, res) => {
       db_host,
       db_port,
       finance_v1,
+      app_url,
     } = req.body
 
     // Check if school exists
@@ -218,6 +243,17 @@ export const updateSchool = async (req, res) => {
         finance_v1 === true || finance_v1 === 1 || finance_v1 === '1' ? 1 : 0
       updateFields.push('finance_v1 = ?')
       updateValues.push(resolvedFinanceV1)
+    }
+    if (app_url !== undefined) {
+      const resolvedAppUrl = normalizeAppUrl(app_url)
+      if (resolvedAppUrl === undefined) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'School URL must be a valid http(s) URL',
+        })
+      }
+      updateFields.push('app_url = ?')
+      updateValues.push(resolvedAppUrl)
     }
     if (db_host !== undefined) {
       const resolvedHost = (db_host || process.env.DB_HOST || 'localhost').trim()

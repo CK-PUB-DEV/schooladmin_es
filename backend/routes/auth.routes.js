@@ -40,7 +40,7 @@ router.get('/me', verifyToken, async (req, res) => {
     let schools = [];
     if (users[0].role === 'admin') {
       const [schoolsData] = await db.query(
-        `SELECT s.id, s.school_name, s.abbrv, s.image_logo, s.address, s.finance_v1, s.db_host, s.db_port, s.db_name, s.db_username, s.db_password
+        `SELECT s.id, s.school_name, s.abbrv, s.image_logo, s.address, s.finance_v1, s.app_url, s.db_host, s.db_port, s.db_name, s.db_username, s.db_password
          FROM schools s
          INNER JOIN user_schools us ON s.id = us.school_id
          WHERE us.user_id = ?`,

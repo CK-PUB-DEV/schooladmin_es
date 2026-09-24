@@ -40,7 +40,7 @@ import { NavUser } from './NavUser'
 import ckLogo from '@/assets/ck-logo.png'
 
 // Navigation items based on user role
-const getNavItems = (role) => {
+const getNavItems = (role, selectedSchool) => {
   const superAdminItems = [
     {
       title: 'Dashboard',
@@ -88,7 +88,10 @@ const getNavItems = (role) => {
         { title: 'Daily Cash Progress Report', url: '/admin/finance/daily-cash-progress' },
         { title: 'Monthly Summary', url: '/admin/finance/monthly-summary' },
         { title: 'Yearly Summary', url: '/admin/finance/yearly-summary' },
-        { title: 'Account Receivables', url: '/admin/finance/account-receivables' }
+        { title: 'Account Receivables', url: '/admin/finance/account-receivables' },
+        ...(Number(selectedSchool?.finance_v1) === 1
+          ? []
+          : [{ title: 'Student Ledgers', url: '/admin/finance/student-ledgers' }]),
       ],
     },
     {
@@ -112,7 +115,7 @@ const getNavItems = (role) => {
 }
 
 export function AppSidebar({ user, selectedSchool }) {
-  const navItems = getNavItems(user?.role)
+  const navItems = getNavItems(user?.role, selectedSchool)
   const adminOtherItems = [
     {
       title: 'Settings',

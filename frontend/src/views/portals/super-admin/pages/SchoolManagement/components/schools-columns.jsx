@@ -65,6 +65,27 @@ export const columns = [
     ),
   },
   {
+    accessorKey: 'app_url',
+    header: ({ column }) => (
+      <DataTableColumnHeader column={column} title='School URL' />
+    ),
+    cell: ({ row }) => {
+      const url = row.getValue('app_url')
+      return url ? (
+        <a
+          href={url}
+          target='_blank'
+          rel='noopener noreferrer'
+          className='max-w-[220px] truncate text-sm text-primary hover:underline block'
+        >
+          {url}
+        </a>
+      ) : (
+        <span className='text-sm text-muted-foreground'>-</span>
+      )
+    },
+  },
+  {
     accessorKey: 'created_at',
     header: ({ column }) => (
       <DataTableColumnHeader column={column} title='Created' />

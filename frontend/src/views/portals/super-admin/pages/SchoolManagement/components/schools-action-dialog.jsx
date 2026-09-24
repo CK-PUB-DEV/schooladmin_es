@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button'
 import {
   Form,
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -33,6 +34,11 @@ const schoolFormSchema = z.object({
   image_logo: z.string().optional(),
   address: z.string().optional(),
   finance_v1: z.boolean().default(false),
+  app_url: z
+    .string()
+    .trim()
+    .refine((v) => !v || /^https?:\/\/[^\s]+$/i.test(v), 'Enter a valid URL starting with http:// or https://')
+    .optional(),
   db_host: z.string().min(1, 'Database host is required'),
   db_port: z.coerce.number().int().min(1, 'Database port must be a valid number'),
   db_name: z.string().min(2, 'Database name must be at least 2 characters'),
@@ -58,6 +64,7 @@ export function SchoolsActionDialog({ open, onSuccess }) {
       image_logo: '',
       address: '',
       finance_v1: false,
+      app_url: '',
       db_host: 'localhost',
       db_port: 3306,
       db_name: '',
@@ -74,6 +81,7 @@ export function SchoolsActionDialog({ open, onSuccess }) {
         image_logo: currentRow.image_logo || '',
         address: currentRow.address || '',
         finance_v1: Boolean(Number(currentRow.finance_v1)),
+        app_url: currentRow.app_url || '',
         db_host: currentRow.db_host || 'localhost',
         db_port: currentRow.db_port || 3306,
         db_name: currentRow.db_name,
@@ -88,6 +96,7 @@ export function SchoolsActionDialog({ open, onSuccess }) {
         image_logo: '',
         address: '',
         finance_v1: false,
+        app_url: '',
         db_host: 'localhost',
         db_port: 3306,
         db_name: '',
@@ -357,6 +366,23 @@ export function SchoolsActionDialog({ open, onSuccess }) {
                       onCheckedChange={(checked) => field.onChange(!!checked)}
                     />
                   </FormControl>
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='app_url'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>School URL (Optional)</FormLabel>
+                  <FormControl>
+                    <Input placeholder='https://app-school.essentiel.ph' {...field} />
+                  </FormControl>
+                  <FormDescription>
+                    Base URL of the school&apos;s Essentiel app. Required for Student Ledgers (Finance V2).
+                  </FormDescription>
+                  <FormMessage />
                 </FormItem>
               )}
             />

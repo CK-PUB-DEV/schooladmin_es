@@ -58,6 +58,11 @@ import {
   getYearlySummary as getFinanceV1YearlySummary,
   getYearlySummaryTable as getFinanceV1YearlySummaryTable,
 } from '../controllers/financeV1Controller.js';
+import {
+  getStudentLedgerFilters,
+  getStudentLedgerList,
+  getStudentLedger,
+} from '../controllers/studentLedgerController.js';
 import { verifyToken } from '../middleware/auth.js';
 import { uploadMemoFile } from '../middleware/upload.js';
 import db from '../config/db.js';
@@ -335,6 +340,11 @@ router.post(
   verifyToken,
   routeFinance(getYearlySummaryTable, getFinanceV1YearlySummaryTable)
 );
+
+// Student Ledger Routes (Finance V2 only; proxied to the school's own app via schools.app_url)
+router.post('/student-ledgers/filters', verifyToken, getStudentLedgerFilters);
+router.post('/student-ledgers/students', verifyToken, getStudentLedgerList);
+router.post('/student-ledgers/ledger', verifyToken, getStudentLedger);
 
 // ============================================================================
 // FINANCE V1 ROUTES (for schools with finance_v1 = 1)

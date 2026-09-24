@@ -42,7 +42,10 @@
       "Bash(\"C:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.0.30-winx64\\\\bin\\\\mysql.exe\" -u root -e \"USE es_ldcu_bcc; SELECT COUNT\\(*\\) as total FROM chrngtrans WHERE cancelled = 0;\")",
       "Bash(grep:*)",
       "Bash(node --check:*)",
-      "Bash(Get-ChildItem -Path \"c:\\\\laragon\\\\www\\\\schooladmin_es\\\\frontend\\\\src\\\\views\\\\portals\\\\admin\" -Recurse -Include \"*.tsx\", \"*.ts\", \"*.jsx\", \"*.js\")"
+      "Bash(Get-ChildItem -Path \"c:\\\\laragon\\\\www\\\\schooladmin_es\\\\frontend\\\\src\\\\views\\\\portals\\\\admin\" -Recurse -Include \"*.tsx\", \"*.ts\", \"*.jsx\", \"*.js\")",
+      "PowerShell($php = Get-ChildItem C:\\\\laragon\\\\bin\\\\php -Directory | Sort-Object Name -Descending | ForEach-Object { Join-Path $_.FullName 'php.exe' } | Where-Object { Test-Path $_ }; $php; Set-Location C:\\\\laragon\\\\www\\\\es_ldcu; foreach \\($p in $php\\) { & $p -v | Select-Object -First 1 })",
+      "PowerShell(Set-Location C:\\\\laragon\\\\www\\\\es_ldcu; $php='C:\\\\laragon\\\\bin\\\\php\\\\php-7.4.33-nts-Win32-vc15-x64\\\\php.exe'; & $php -l routes/api.php; & $php -l app/Http/Middleware/VerifySchoolAdminApiKey.php; & $php -l app/Http/Kernel.php; & $php artisan route:list --path=schooladmin)",
+      "PowerShell(Get-NetTCPConnection -LocalPort 5055 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Confirm:$false }; \"stopped\")"
     ]
   }
 }

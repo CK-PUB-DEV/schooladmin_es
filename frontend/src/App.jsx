@@ -24,6 +24,7 @@ import AccountReceivables from '@/views/portals/admin/pages/AccountReceivables'
 import DailyCashProgress from '@/views/portals/admin/pages/DailyCashProgress'
 import MonthlySummary from '@/views/portals/admin/pages/MonthlySummary'
 import YearlySummary from '@/views/portals/admin/pages/YearlySummary'
+import StudentLedgers from '@/views/portals/admin/pages/StudentLedgers'
 
 // Protected Route Component
 function ProtectedRoute({ children, requiredRole }) {
@@ -102,6 +103,7 @@ function App() {
           <Route path="finance/monthly-summary" element={<MonthlySummary />} />
           <Route path="finance/yearly-summary" element={<YearlySummary />} />
           <Route path="finance/account-receivables" element={<AccountReceivables />} />
+          <Route path="finance/student-ledgers" element={<StudentLedgers />} />
           <Route path="finance/expenses-monitoring" element={<div className="p-6">Expenses Monitoring - Coming Soon</div>} />
 
           {/* HR Reports */}
