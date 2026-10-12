@@ -489,6 +489,34 @@ const hasBookEntriesColumn = async (db, columnName) => {
   return hasColumn;
 };
 
+const chrngTransColumnCache = new Map();
+
+const hasChrngTransColumn = async (db, columnName) => {
+  const dbName =
+    db?.config?.database ||
+    db?.connection?.config?.database ||
+    null;
+  const cacheKey = dbName ? `${dbName}.chrngtrans.${columnName}` : null;
+
+  if (cacheKey && chrngTransColumnCache.has(cacheKey)) {
+    return chrngTransColumnCache.get(cacheKey);
+  }
+
+  const [rows] = await db.execute(
+    `SELECT COUNT(*) as count
+     FROM information_schema.columns
+     WHERE table_schema = DATABASE()
+       AND table_name = 'chrngtrans'
+       AND column_name = ?`,
+    [columnName]
+  );
+  const hasColumn = Number(rows?.[0]?.count || 0) > 0;
+  if (cacheKey) {
+    chrngTransColumnCache.set(cacheKey, hasColumn);
+  }
+  return hasColumn;
+};
+
 /**
  * Get school info including shssetup flag
  */
@@ -1695,6 +1723,11 @@ export const getCashierSummary = async (req, res) => {
       extraParams.push(terminalId);
     }
 
+    // Unsynced cashier records (syncstatus = 0) are duplicates/drafts and must be excluded.
+    if (await hasChrngTransColumn(db, 'syncstatus')) {
+      extraFilters.push('IFNULL(t.syncstatus, 1) <> 0');
+    }
+
     let statusClause = '';
     if (status === 'posted') {
       statusClause = ' AND t.cancelled = 0 AND t.posted = 1';
@@ -1897,6 +1930,11 @@ export const getTransactionList = async (req, res) => {
     if (terminalId) {
       query += ` AND t.terminalno = ?`;
       params.push(terminalId);
+    }
+
+    // Unsynced cashier records (syncstatus = 0) are duplicates/drafts and must be excluded.
+    if (await hasChrngTransColumn(db, 'syncstatus')) {
+      query += ` AND IFNULL(t.syncstatus, 1) <> 0`;
     }
 
     if (status === 'posted') {
