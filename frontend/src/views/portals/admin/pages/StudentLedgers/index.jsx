@@ -38,11 +38,7 @@ export default function StudentLedgers() {
 
   const schoolDbConfig = selectedSchool
     ? {
-        db_host: selectedSchool.db_host || 'localhost',
-        db_port: selectedSchool.db_port || 3306,
         db_name: selectedSchool.db_name,
-        db_username: selectedSchool.db_username || 'root',
-        db_password: selectedSchool.db_password || '',
         finance_v1: selectedSchool.finance_v1 || 0,
       }
     : null;

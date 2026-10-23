@@ -42,11 +42,7 @@ export function EmployeeSelector({ selectedEmployees, onSelectionChange, selecte
         credentials: 'include',
         body: JSON.stringify({
           schoolDbConfig: {
-            db_host: selectedSchool.db_host || 'localhost',
-            db_port: selectedSchool.db_port || 3306,
             db_name: selectedSchool.db_name,
-            db_username: selectedSchool.db_username || 'root',
-            db_password: selectedSchool.db_password || '',
           },
         }),
       })

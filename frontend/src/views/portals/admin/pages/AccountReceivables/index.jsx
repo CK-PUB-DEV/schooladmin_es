@@ -230,11 +230,7 @@ export default function AccountReceivables() {
   const token = localStorage.getItem('token');
 
   const schoolDbConfig = selectedSchool ? {
-    db_host:     selectedSchool.db_host     || 'localhost',
-    db_port:     selectedSchool.db_port     || 3306,
     db_name:     selectedSchool.db_name,
-    db_username: selectedSchool.db_username || 'root',
-    db_password: selectedSchool.db_password || '',
     finance_v1:  selectedSchool.finance_v1  || 0,
   } : null;
 
@@ -489,12 +485,9 @@ export default function AccountReceivables() {
   const withBalance      = isV2Data ? Number(summaryData.students_with_balance) || 0 : Number(v1s.students_with_balance)           || 0;
   const breakdown        = isV2Data ? (summaryData.breakdown || []) : [];
 
-  const tabs = isFinanceV1
-    ? [{ id: 'overview', label: 'Overview', icon: LayoutList }]
-    : [
-        { id: 'overview',      label: 'Overview',     icon: LayoutList },
-        { id: 'transactions',  label: 'Transactions', icon: BookOpen   },
-      ];
+  // Finance V2 schools are read through their own app, which has no school-wide ledger
+  // entry list; each student's ledger is under Student Ledgers.
+  const tabs = [{ id: 'overview', label: 'Overview', icon: LayoutList }];
 
   return (
     <div className="space-y-4 p-6">

@@ -64,11 +64,54 @@ import {
   getStudentLedger,
 } from '../controllers/studentLedgerController.js';
 import { verifyToken } from '../middleware/auth.js';
+import { attachSchool } from '../middleware/school.js';
+import {
+  getCashierSummaryV2,
+  getTransactionListV2,
+  getPaymentTypesV2,
+  getTerminalsV2,
+  getDailyCashSummaryV2,
+  getDailyCashItemsV2,
+} from '../controllers/v2/collections.js';
+import {
+  getReceivableFiltersV2,
+  getReceivableSummaryV2,
+  getReceivableListV2,
+} from '../controllers/v2/receivables.js';
+import {
+  getMonthlySummaryV2,
+  getMonthlySummaryItemsV2,
+  getYearlySummaryV2,
+  getYearlySummaryTableV2,
+} from '../controllers/v2/summaries.js';
+import {
+  getEnrollmentSummaryV2,
+  getEnrollmentListV2,
+  getSchoolYearsV2,
+  getSemestersV2,
+} from '../controllers/v2/enrollment.js';
+import {
+  getAllEmployeesV2,
+  getEmployeeByIdV2,
+  getUserTypesV2,
+  getEmployeeAttendanceV2,
+  getSchoolCalendarEventsV2,
+  getAllMemosV2,
+  getMemoByIdV2,
+  createMemoV2,
+  updateMemoV2,
+  deleteMemoV2,
+} from '../controllers/v2/hrCalendarMemos.js';
+import { getDashboardDataV2 } from '../controllers/v2/dashboard.js';
 import { uploadMemoFile } from '../middleware/upload.js';
 import db from '../config/db.js';
 import mysql from 'mysql2/promise';
 
 const router = express.Router();
+
+// Every admin route: logged in, and the school resolved server-side (school id or
+// db_name from the page; database credentials never come from the browser).
+router.use(verifyToken, attachSchool);
 
 const getSchoolConnection = async (schoolDbConfig) => {
   const parsedPort = Number.parseInt(schoolDbConfig.db_port, 10);
@@ -145,27 +188,32 @@ const routeFinance = (v2Handler, v1Handler) => async (req, res, next) => {
   return v2Handler(req, res, next);
 };
 
+// Modules outside Finance: a Finance V2 school is read through its own app (API key);
+// a Finance V1 school keeps its direct database handler.
+const bySchool = (v2Handler, v1Handler) => (req, res, next) =>
+  req.school && Number(req.school.finance_v1) !== 1 ? v2Handler(req, res, next) : v1Handler(req, res, next);
+
 // Dashboard Routes (all require authentication)
 // POST /api/admin/dashboard - Get comprehensive dashboard data
-router.post('/dashboard', verifyToken, getDashboardData);
+router.post('/dashboard', verifyToken, bySchool(getDashboardDataV2, getDashboardData));
 
 // Employee Profile Routes (all require authentication)
 // POST /api/admin/employees - Get all employees (POST to send school db config)
-router.post('/employees', verifyToken, getAllEmployees);
+router.post('/employees', verifyToken, bySchool(getAllEmployeesV2, getAllEmployees));
 
 // POST /api/admin/employees/:id - Get single employee (POST to send school db config)
-router.post('/employees/:id', verifyToken, getEmployeeById);
+router.post('/employees/:id', verifyToken, bySchool(getEmployeeByIdV2, getEmployeeById));
 
 // POST /api/admin/user-types - Get all user types (POST to send school db config)
-router.post('/user-types', verifyToken, getUserTypes);
+router.post('/user-types', verifyToken, bySchool(getUserTypesV2, getUserTypes));
 
 // Employee Attendance Routes (all require authentication)
 // POST /api/admin/employee-attendance - Get employee attendance records
-router.post('/employee-attendance', verifyToken, getEmployeeAttendance);
+router.post('/employee-attendance', verifyToken, bySchool(getEmployeeAttendanceV2, getEmployeeAttendance));
 
 // Memo Board Routes (all require authentication)
 // POST /api/admin/memos - Get all memos
-router.post('/memos', verifyToken, getAllMemos);
+router.post('/memos', verifyToken, bySchool(getAllMemosV2, getAllMemos));
 
 // POST /api/admin/memos/upload-file - Upload memo file
 router.post('/memos/upload-file', verifyToken, (req, res) => {
@@ -214,57 +262,57 @@ router.post('/memos/upload-file', verifyToken, (req, res) => {
 });
 
 // POST /api/admin/memos/create - Create new memo (must be before /:id route)
-router.post('/memos/create', verifyToken, createMemo);
+router.post('/memos/create', verifyToken, bySchool(createMemoV2, createMemo));
 
 // POST /api/admin/memos/:id - Get single memo
-router.post('/memos/:id', verifyToken, getMemoById);
+router.post('/memos/:id', verifyToken, bySchool(getMemoByIdV2, getMemoById));
 
 // PUT /api/admin/memos/:id - Update memo
-router.put('/memos/:id', verifyToken, updateMemo);
+router.put('/memos/:id', verifyToken, bySchool(updateMemoV2, updateMemo));
 
 // DELETE /api/admin/memos/:id - Delete memo
-router.delete('/memos/:id', verifyToken, deleteMemo);
+router.delete('/memos/:id', verifyToken, bySchool(deleteMemoV2, deleteMemo));
 
 // Enrollment Routes (all require authentication)
 // POST /api/admin/enrollment/summary - Get enrollment summary statistics
-router.post('/enrollment/summary', verifyToken, getEnrollmentSummary);
+router.post('/enrollment/summary', verifyToken, bySchool(getEnrollmentSummaryV2, getEnrollmentSummary));
 
 // POST /api/admin/enrollment/list - Get detailed enrollment list
-router.post('/enrollment/list', verifyToken, getEnrollmentList);
+router.post('/enrollment/list', verifyToken, bySchool(getEnrollmentListV2, getEnrollmentList));
 
 // POST /api/admin/enrollment/school-years - Get available school years
-router.post('/enrollment/school-years', verifyToken, getSchoolYears);
+router.post('/enrollment/school-years', verifyToken, bySchool(getSchoolYearsV2, getSchoolYears));
 
 // POST /api/admin/enrollment/semesters - Get available semesters
-router.post('/enrollment/semesters', verifyToken, getSemesters);
+router.post('/enrollment/semesters', verifyToken, bySchool(getSemestersV2, getSemesters));
 
 // Cashier Transaction Routes (all require authentication)
 // POST /api/admin/cashier/summary - Get cashier summary statistics
 router.post(
   '/cashier/summary',
   verifyToken,
-  routeFinance(getCashierSummary, getFinanceV1CashierSummary)
+  routeFinance(getCashierSummaryV2, getFinanceV1CashierSummary)
 );
 
 // POST /api/admin/cashier/transactions - Get transaction list
 router.post(
   '/cashier/transactions',
   verifyToken,
-  routeFinance(getTransactionList, getFinanceV1TransactionList)
+  routeFinance(getTransactionListV2, getFinanceV1TransactionList)
 );
 
 // POST /api/admin/cashier/payment-types - Get payment types
 router.post(
   '/cashier/payment-types',
   verifyToken,
-  routeFinance(getPaymentTypes, getFinanceV1PaymentTypes)
+  routeFinance(getPaymentTypesV2, getFinanceV1PaymentTypes)
 );
 
 // POST /api/admin/cashier/terminals - Get terminals
 router.post(
   '/cashier/terminals',
   verifyToken,
-  routeFinance(getTerminals, getFinanceV1Terminals)
+  routeFinance(getTerminalsV2, getFinanceV1Terminals)
 );
 
 // Accounts Receivable Routes (all require authentication)
@@ -272,58 +320,62 @@ router.post(
 router.post(
   '/receivables/filters',
   verifyToken,
-  routeFinance(getAccountReceivableFilters, getFinanceV1ReceivableFilters)
+  routeFinance(getReceivableFiltersV2, getFinanceV1ReceivableFilters)
 );
 
 // POST /api/admin/receivables/summary - Get account receivables summary
 router.post(
   '/receivables/summary',
   verifyToken,
-  routeFinance(getAccountReceivableSummary, getFinanceV1ReceivableSummary)
+  routeFinance(getReceivableSummaryV2, getFinanceV1ReceivableSummary)
 );
 
 // POST /api/admin/receivables/list - Get account receivables list
 router.post(
   '/receivables/list',
   verifyToken,
-  routeFinance(getAccountReceivableList, getFinanceV1ReceivableList)
+  routeFinance(getReceivableListV2, getFinanceV1ReceivableList)
 );
 
 // POST /api/admin/receivables/transactions - Get student_ledger entries (V2 only, lazy tab)
-router.post('/receivables/transactions', verifyToken, getAccountReceivableTransactions);
+// The school app has no school-wide ledger-entry list (its ledger is per student), so
+// this tab is not offered for Finance V2 schools; their per-student ledgers are under Student Ledgers.
+router.post('/receivables/transactions', verifyToken, (req, res) =>
+  res.status(410).json({ status: 'error', message: 'Ledger entries are under Student Ledgers for this school.' })
+);
 
 // Daily Cash Progress Routes (all require authentication)
 // POST /api/admin/cash-progress/summary - Get daily cash summary
 router.post(
   '/cash-progress/summary',
   verifyToken,
-  routeFinance(getDailyCashSummary, getFinanceV1DailyCashSummary)
+  routeFinance(getDailyCashSummaryV2, getFinanceV1DailyCashSummary)
 );
 
 // POST /api/admin/cash-progress/items - Get daily cash items
 router.post(
   '/cash-progress/items',
   verifyToken,
-  routeFinance(getDailyCashItems, getFinanceV1DailyCashItems)
+  routeFinance(getDailyCashItemsV2, getFinanceV1DailyCashItems)
 );
 
 // Calendar Routes (all require authentication)
 // POST /api/admin/calendar/events - Get school calendar events
-router.post('/calendar/events', verifyToken, getSchoolCalendarEvents);
+router.post('/calendar/events', verifyToken, bySchool(getSchoolCalendarEventsV2, getSchoolCalendarEvents));
 
 // Monthly Summary Routes (all require authentication)
 // POST /api/admin/monthly-summary/summary - Get monthly summary analytics
 router.post(
   '/monthly-summary/summary',
   verifyToken,
-  routeFinance(getMonthlySummary, getFinanceV1MonthlySummary)
+  routeFinance(getMonthlySummaryV2, getFinanceV1MonthlySummary)
 );
 
 // POST /api/admin/monthly-summary/items - Get monthly summary items
 router.post(
   '/monthly-summary/items',
   verifyToken,
-  routeFinance(getMonthlySummaryItems, getFinanceV1MonthlySummaryItems)
+  routeFinance(getMonthlySummaryItemsV2, getFinanceV1MonthlySummaryItems)
 );
 
 // Yearly Summary Routes (all require authentication)
@@ -331,14 +383,14 @@ router.post(
 router.post(
   '/yearly-summary/summary',
   verifyToken,
-  routeFinance(getYearlySummary, getFinanceV1YearlySummary)
+  routeFinance(getYearlySummaryV2, getFinanceV1YearlySummary)
 );
 
 // POST /api/admin/yearly-summary/table - Get yearly summary table data
 router.post(
   '/yearly-summary/table',
   verifyToken,
-  routeFinance(getYearlySummaryTable, getFinanceV1YearlySummaryTable)
+  routeFinance(getYearlySummaryTableV2, getFinanceV1YearlySummaryTable)
 );
 
 // Student Ledger Routes (Finance V2 only; proxied to the school's own app via schools.app_url)

@@ -52,7 +52,7 @@ export function MemoVisibilityDialog({ memo, open, onClose, selectedSchool }) {
       return
     }
 
-    const schoolKey = `${selectedSchool.db_host || 'localhost'}|${selectedSchool.db_port || 3306}|${selectedSchool.db_name}|${selectedSchool.db_username}|${selectedSchool.db_password || ''}`
+    const schoolKey = `${selectedSchool.id}|${selectedSchool.db_name}`
     if (loadedSchoolKeyRef.current === schoolKey && employees.length > 0) return
 
     const controller = new AbortController()
@@ -71,11 +71,7 @@ export function MemoVisibilityDialog({ memo, open, onClose, selectedSchool }) {
           signal: controller.signal,
           body: JSON.stringify({
             schoolDbConfig: {
-              db_host: selectedSchool.db_host || 'localhost',
-              db_port: selectedSchool.db_port || 3306,
               db_name: selectedSchool.db_name,
-              db_username: selectedSchool.db_username || 'root',
-              db_password: selectedSchool.db_password || '',
             },
           }),
         })
@@ -103,11 +99,7 @@ export function MemoVisibilityDialog({ memo, open, onClose, selectedSchool }) {
     return () => controller.abort()
   }, [
     open,
-    selectedSchool?.db_host,
-    selectedSchool?.db_port,
     selectedSchool?.db_name,
-    selectedSchool?.db_username,
-    selectedSchool?.db_password,
     employees.length,
   ])
 

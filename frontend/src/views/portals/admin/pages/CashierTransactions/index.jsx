@@ -40,11 +40,7 @@ export default function CashierTransactions() {
   const token = localStorage.getItem('token');
 
   const schoolDbConfig = selectedSchool ? {
-    db_host: selectedSchool.db_host || 'localhost',
-    db_port: selectedSchool.db_port || 3306,
     db_name: selectedSchool.db_name,
-    db_username: selectedSchool.db_username || 'root',
-    db_password: selectedSchool.db_password || '',
   } : null;
 
   // Check if school uses finance_v1 to determine API routing

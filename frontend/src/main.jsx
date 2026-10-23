@@ -4,6 +4,9 @@ import { Toaster } from 'sonner'
 import './index.css'
 import { DialogsProvider } from '@/context/dialogs-provider'
 import App from './App.jsx'
+import { scrubStoredSchools } from '@/lib/scrubStoredSchools'
+
+scrubStoredSchools()
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
