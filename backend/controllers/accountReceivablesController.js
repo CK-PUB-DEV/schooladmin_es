@@ -872,6 +872,41 @@ const fetchStudents = async (db, { syid, semid, programId, levelId, search }) =>
 const shouldUseStudentTransactions = ({ dateRange, useStudledger }) =>
   !useStudledger && !hasDateRange(dateRange);
 
+const ENROLLED_STUDSTATUS = [1, 2, 4];
+
+/**
+ * Restrict student_transactions rows (alias `st`) to the students counted as
+ * enrolled on the dashboard: status 1/2/4 for the sy (and sem for college),
+ * active studinfo, one row per student (a semid 0 row is dropped when the
+ * student also has a row for the selected semester).
+ */
+const buildEnrolledStudentCondition = ({ syid, semid }) => {
+  const statuses = ENROLLED_STUDSTATUS.join(',');
+  const semCond = semid ? 'AND e.semid = ?' : '';
+  const collegeParams = semid ? [syid, semid] : [syid];
+  const conditions = [
+    `st.studid IN (
+      SELECT e.studid FROM (
+        SELECT studid FROM enrolledstud e WHERE e.deleted = 0 AND e.syid = ? AND e.studstatus IN (${statuses})
+        UNION
+        SELECT studid FROM sh_enrolledstud e WHERE e.deleted = 0 AND e.syid = ? AND e.studstatus IN (${statuses})
+        UNION
+        SELECT studid FROM college_enrolledstud e WHERE e.deleted = 0 AND e.syid = ? ${semCond} AND e.studstatus IN (${statuses})
+      ) e
+      JOIN studinfo esi ON esi.id = e.studid AND esi.deleted = 0 AND esi.studisactive = 1
+    )`,
+  ];
+  const params = [syid, syid, ...collegeParams];
+  if (semid) {
+    conditions.push(`NOT (st.semid = 0 AND EXISTS (
+      SELECT 1 FROM student_transactions s2
+      WHERE s2.studid = st.studid AND s2.syid = st.syid AND s2.semid = ?
+    ))`);
+    params.push(semid);
+  }
+  return { conditions, params };
+};
+
 const buildStudentTransactionQueryParts = ({ syid, semid, programId, levelId, search }) => {
   const params = [];
   const where = ['si.deleted = 0'];
@@ -884,6 +919,12 @@ const buildStudentTransactionQueryParts = ({ syid, semid, programId, levelId, se
   if (semid) {
     where.push('st.semid IN (0, ?)');
     params.push(semid);
+  }
+
+  if (syid) {
+    const enrolled = buildEnrolledStudentCondition({ syid, semid });
+    where.push(...enrolled.conditions);
+    params.push(...enrolled.params);
   }
 
   if (programId) {
@@ -1859,6 +1900,10 @@ export const getAccountReceivableSummary = async (req, res) => {
     if (semid)    { where.push('st.semid IN (0, ?)'); params.push(semid); }
     if (levelId)  { where.push('st.levelid = ?');     params.push(Number(levelId)); }
     if (programId){ where.push('gl.acadprogid = ?');  params.push(Number(programId)); }
+
+    const enrolled = buildEnrolledStudentCondition({ syid, semid });
+    where.push(...enrolled.conditions);
+    params.push(...enrolled.params);
 
     const [rows] = await pool.execute(
       `SELECT
