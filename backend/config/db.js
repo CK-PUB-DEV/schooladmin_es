@@ -1,3 +1,6 @@
+// Load .env here: server.js calls dotenv.config() in its body, but ES module imports run
+// first, so without this the pool is created before the .env values exist.
+import 'dotenv/config';
 import mysql from 'mysql2';
 
 // The live .env names the database DB_DATABASE; .env.example uses DB_NAME. Accept both,
