@@ -1,7 +1,7 @@
 /**
  * Finance V2 schools' Dashboard, assembled from the school's own pages:
  *   enrolled / pending, by level, by gender  registrarv2 Enrollment Statistics + status breakdown
- *   collections today / receivables           the school's finance dashboard
+ *   collections today / total / receivables   the school's finance dashboard (total = selected SY/semester)
  *   collections this month                    cashier grand total, 1st of the month to today
  *   12-month collections                      the school's Year End report (month totals)
  *   employees by user type                    HR v3 employees (0 where HR v3 is off)
@@ -75,6 +75,7 @@ export const getDashboardDataV2 = v2Handler(async (school, body) => {
       pendingEnrollments: Number(statusTotals[0]) || 0,
       employees: Number(employees?.total) || employeeRows.length,
       collectionsToday: Number(finance?.kpis?.today_collection) || 0,
+      totalCollection: Number(finance?.kpis?.total_collection) || 0,
       collectionsMTD: Number(mtd?.grand_total) || 0,
       receivables: Number(finance?.kpis?.total_receivable) || 0,
       upcomingEvents: eventList.length,

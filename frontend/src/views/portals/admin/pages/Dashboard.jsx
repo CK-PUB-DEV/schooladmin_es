@@ -16,6 +16,7 @@ import {
   TrendingUp,
   Users,
   UsersRound,
+  Wallet,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -496,6 +497,9 @@ export default function AdminDashboard() {
   const employees = toNumber(data.kpis.employees)
   const collectionsToday = toNumber(data.kpis.collectionsToday)
   const collectionsMTD = toNumber(data.kpis.collectionsMTD)
+  // Only Finance V2 schools send it (the school's own finance dashboard total).
+  const hasTotalCollection = data.kpis.totalCollection !== undefined
+  const totalCollection = toNumber(data.kpis.totalCollection)
   const receivables = toNumber(data.kpis.receivables)
   const upcomingEvents = toNumber(data.kpis.upcomingEvents)
   const memosThisWeek = toNumber(data.kpis.memosThisWeek)
@@ -545,6 +549,19 @@ export default function AdminDashboard() {
       trendValue: mtdVsAvg,
       format: 'currency',
     },
+    ...(hasTotalCollection
+      ? [
+          {
+            key: 'total-collection',
+            title: 'Total Collection',
+            watermark: 'FIN',
+            value: totalCollection,
+            helper: activeSemLabel ? 'This school year and semester' : 'This school year',
+            icon: Wallet,
+            format: 'currency',
+          },
+        ]
+      : []),
     {
       key: 'receivables',
       title: 'Receivables',
